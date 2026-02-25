@@ -62,7 +62,7 @@ if not ANTHROPIC_API_KEY:
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 MODEL_OPTIONS: dict[str, dict] = {
-    "Atlas AI": {"provider": "anthropic", "model": "claude-opus-4-6"},
+    "Atlas AI": {"provider": "anthropic", "model": "claude-sonnet-4-5"},
 }
 
 DEFAULT_MODEL_NAME = next(iter(MODEL_OPTIONS)) if MODEL_OPTIONS else "No API key set"
@@ -397,7 +397,8 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("dealer_name","dealer_name")}, {raw_expr("DV Dealer ID","dv_dealer_id")},
             {raw_expr("Inventory Date","inventory_date_raw")}, {date_expr("Inventory Date","inventory_date")},
             {raw_expr("Sold Date","sold_date_raw")}, {date_expr("Sold Date","sold_date")},
-            {raw_expr("Purchase Date","purchase_date_raw")}, {date_expr("Purchase Date","purchase_date")}
+            {raw_expr("Purchase Date","purchase_date_raw")}, {date_expr("Purchase Date","purchase_date")},
+            file_date
         FROM read_parquet('{parquet_glob("inventory")}')
     """)
 
@@ -808,16 +809,19 @@ dms_appointments (booked appointments — one row per appointment):
   Vehicle:      make, model, year, exterior_color, appointment_mileage
   Location:     dealer_name, dv_dealer_id, city, state, zip
 
-dms_inventory (vehicle inventory snapshot — one row per stock number):
+dms_inventory (vehicle inventory snapshot — one row per stock number per day):
   Identity:     vin, stock_number
   Vehicle:      make, model, year, trim, description, vehicle_type, category
-  Status:       vehicle_status (e.g. 'In Stock', 'Sold', 'On Order'), certification ('Certified'|'')
+  Status:       vehicle_status (EMPTY STRING '' for active/in-stock; 'NOT IN INVENTORY' for sold/gone)
+                certification ('Certified'|'')
   Odometer:     odometer (INTEGER)
   Pricing (all VARCHAR — cast to DOUBLE):
     list_price, internet_price, msrp, cost, wholesale
   Colors:       exterior_color, interior_color
   Specs:        fuel_type, transmission
-  Dates:        inventory_date (DATE), sold_date (DATE), purchase_date (DATE)
+  Dates:        inventory_date (DATE) = date vehicle arrived on lot (use for days-in-inventory calc)
+                sold_date (DATE), purchase_date (DATE)
+                file_date (DATE) = daily snapshot date (use this as "today" for current inventory queries)
   Service link: open_ro_number (VINs with an open RO in the shop)
   Location:     location, dealer_name, dv_dealer_id
 
@@ -985,36 +989,63 @@ SELECT * FROM no_shows ORDER BY no_show_count DESC
 -- NEVER filter vehicle_status ILIKE '%stock%' — it returns 0 because the value is empty string, not 'In Stock'.
 -- ALWAYS use: vehicle_status NOT ILIKE '%not in%'
 -- vehicle_type: 'N'=New, 'U'=Used, 'D'=Demo
+-- Use file_date = MAX(file_date) to get the latest snapshot (current inventory)
+WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
 SELECT
   COUNT(DISTINCT vin) AS total_units,
   SUM(CASE WHEN vehicle_type = 'N' THEN 1 ELSE 0 END) AS new_units,
   SUM(CASE WHEN vehicle_type = 'U' THEN 1 ELSE 0 END) AS used_units,
   SUM(CASE WHEN vehicle_type = 'D' THEN 1 ELSE 0 END) AS demo_units
 FROM dms_inventory
-WHERE vehicle_status NOT ILIKE '%not in%'
+WHERE file_date = (SELECT snap FROM latest)
+  AND vehicle_status NOT ILIKE '%not in%'
 
 -- AVERAGE DAYS IN INVENTORY (for units currently in stock)
-WITH anchor AS (SELECT MAX(inventory_date) AS latest FROM dms_inventory WHERE inventory_date < DATE '2027-01-01')
-SELECT ROUND(AVG(DATEDIFF('day', inventory_date, (SELECT latest FROM anchor))),1) AS avg_days_in_inventory,
+-- file_date is the daily snapshot date; inventory_date is when the vehicle arrived on lot
+WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
+SELECT ROUND(AVG(DATEDIFF('day', inventory_date, (SELECT snap FROM latest))),1) AS avg_days_in_inventory,
        COUNT(DISTINCT vin) AS unit_count
 FROM dms_inventory
-WHERE vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
+WHERE file_date = (SELECT MAX(file_date) FROM dms_inventory)
+  AND vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
 
--- AGED INVENTORY OVER 60 DAYS
-WITH anchor AS (SELECT MAX(inventory_date) AS latest FROM dms_inventory WHERE inventory_date < DATE '2027-01-01')
+-- AGED INVENTORY OVER 60 DAYS (vehicles that have been on lot longest)
+WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
 SELECT stock_number, vin, year, make, model, trim, exterior_color, odometer,
        list_price, inventory_date,
-       DATEDIFF('day', inventory_date, (SELECT latest FROM anchor)) AS days_in_inventory
+       DATEDIFF('day', inventory_date, (SELECT snap FROM latest)) AS days_in_inventory
 FROM dms_inventory
-WHERE vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
-  AND DATEDIFF('day', inventory_date, (SELECT latest FROM anchor)) > 60
+WHERE file_date = (SELECT MAX(file_date) FROM dms_inventory)
+  AND vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
+  AND DATEDIFF('day', inventory_date, (SELECT snap FROM latest)) > 60
 ORDER BY days_in_inventory DESC
+
+-- INVENTORY ON A SPECIFIC DATE (e.g. Jan 4 2026)
+SELECT year, make, model, trim, vin, stock_number, odometer,
+       list_price, exterior_color, vehicle_type, certification,
+       DATEDIFF('day', inventory_date, file_date) AS days_in_inventory
+FROM dms_inventory
+WHERE file_date = DATE '2026-01-04'
+  AND vehicle_status NOT ILIKE '%not in%'
+ORDER BY make, model, year
+
+-- VEHICLES IN INVENTORY LONGEST (currently on lot)
+WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
+SELECT year, make, model, trim, stock_number, vin, odometer, list_price, inventory_date,
+       DATEDIFF('day', inventory_date, (SELECT snap FROM latest)) AS days_in_inventory
+FROM dms_inventory
+WHERE file_date = (SELECT snap FROM latest)
+  AND vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
+ORDER BY days_in_inventory DESC
+LIMIT 20
 
 -- TOTAL INVENTORY VALUE
 SELECT COUNT(DISTINCT vin) AS units,
        ROUND(SUM(try_cast(list_price AS DOUBLE)),2) AS total_list_value,
        ROUND(SUM(try_cast(cost AS DOUBLE)),2) AS total_cost_value
-FROM dms_inventory WHERE vehicle_status NOT ILIKE '%not in%'
+FROM dms_inventory
+WHERE file_date = (SELECT MAX(file_date) FROM dms_inventory)
+  AND vehicle_status NOT ILIKE '%not in%'
 
 -- CERTIFIED VS NON-CERTIFIED
 SELECT CASE WHEN certification ILIKE '%certif%' THEN 'Certified' ELSE 'Non-Certified' END AS type,
@@ -1269,7 +1300,9 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - To detect show-ups/no-shows: LEFT JOIN dms_appointments to dms_service ON vin=vin AND s.open_date BETWEEN a.appointment_date - INTERVAL 3 DAY AND a.appointment_date + INTERVAL 3 DAY — a matching service row = showed up, no match = no-show
 - To detect appointment-based ROs: dms_service.appointment_flag ILIKE '%y%'
 - Known dealer: 'Stephen Wade Nissan' — always match with ILIKE
-- dms_inventory has a file_date (DATE) column representing the snapshot date — use as proxy for "today" when computing days in inventory
+- dms_inventory is a daily snapshot table: file_date (DATE) is the snapshot date (e.g. 2026-01-04). For "current" inventory always filter WHERE file_date = (SELECT MAX(file_date) FROM dms_inventory). For inventory on a specific date filter WHERE file_date = DATE 'YYYY-MM-DD'.
+- days_in_inventory = DATEDIFF('day', inventory_date, file_date) — inventory_date is when the vehicle arrived on lot, file_date is the snapshot date
+- "vehicles in inventory longest" → ORDER BY DATEDIFF('day', inventory_date, file_date) DESC with latest file_date filter
 
 ━━━━━━━━━━━━━━━━━ SYNONYMS ━━━━━━━━━━━━━━━━━
 

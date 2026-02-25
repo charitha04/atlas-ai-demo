@@ -23,7 +23,7 @@ const conversationStarters = [
 
 // Conversation starters for Stephen Wade Group (real DMS data)
 const stephenWadeConversationStarters = [
-  "How many repair orders were closed last month?",
+  "List all make, model, year of vehicles in inventory on Jan 4 2026",
   "Which service advisor handled the most ROs?",
   "How many cars are currently in inventory?",
   "What are the top 5 service types performed?"
