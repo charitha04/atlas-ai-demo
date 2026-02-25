@@ -956,52 +956,62 @@ no_shows AS (
 )
 SELECT * FROM no_shows ORDER BY no_show_count DESC
 
--- INVENTORY HEALTH: HOW MANY UNITS IN STOCK
-SELECT vehicle_status, COUNT(*) AS unit_count
-FROM dms_inventory GROUP BY vehicle_status ORDER BY unit_count DESC
+-- INVENTORY HEALTH: HOW MANY UNITS CURRENTLY IN STOCK
+-- IMPORTANT: vehicle_status='' means ACTIVE/IN STOCK. vehicle_status='NOT IN INVENTORY' means GONE.
+-- NEVER filter vehicle_status ILIKE '%stock%' — it returns 0 because the value is empty string, not 'In Stock'.
+-- ALWAYS use: vehicle_status NOT ILIKE '%not in%'
+-- vehicle_type: 'N'=New, 'U'=Used, 'D'=Demo
+SELECT
+  COUNT(DISTINCT vin) AS total_units,
+  SUM(CASE WHEN vehicle_type = 'N' THEN 1 ELSE 0 END) AS new_units,
+  SUM(CASE WHEN vehicle_type = 'U' THEN 1 ELSE 0 END) AS used_units,
+  SUM(CASE WHEN vehicle_type = 'D' THEN 1 ELSE 0 END) AS demo_units
+FROM dms_inventory
+WHERE vehicle_status NOT ILIKE '%not in%'
 
 -- AVERAGE DAYS IN INVENTORY (for units currently in stock)
-WITH anchor AS (SELECT MAX(file_date) AS today FROM dms_inventory)
-SELECT ROUND(AVG(DATEDIFF('day', inventory_date, (SELECT today FROM anchor))),1) AS avg_days_in_inventory,
-       COUNT(*) AS unit_count
-FROM dms_inventory WHERE vehicle_status ILIKE '%stock%' AND inventory_date IS NOT NULL
+WITH anchor AS (SELECT MAX(inventory_date) AS latest FROM dms_inventory WHERE inventory_date < DATE '2027-01-01')
+SELECT ROUND(AVG(DATEDIFF('day', inventory_date, (SELECT latest FROM anchor))),1) AS avg_days_in_inventory,
+       COUNT(DISTINCT vin) AS unit_count
+FROM dms_inventory
+WHERE vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
 
 -- AGED INVENTORY OVER 60 DAYS
-WITH anchor AS (SELECT MAX(file_date) AS today FROM dms_inventory)
+WITH anchor AS (SELECT MAX(inventory_date) AS latest FROM dms_inventory WHERE inventory_date < DATE '2027-01-01')
 SELECT stock_number, vin, year, make, model, trim, exterior_color, odometer,
        list_price, inventory_date,
-       DATEDIFF('day', inventory_date, (SELECT today FROM anchor)) AS days_in_inventory
+       DATEDIFF('day', inventory_date, (SELECT latest FROM anchor)) AS days_in_inventory
 FROM dms_inventory
-WHERE vehicle_status ILIKE '%stock%' AND inventory_date IS NOT NULL
-  AND DATEDIFF('day', inventory_date, (SELECT today FROM anchor)) > 60
+WHERE vehicle_status NOT ILIKE '%not in%' AND inventory_date IS NOT NULL
+  AND DATEDIFF('day', inventory_date, (SELECT latest FROM anchor)) > 60
 ORDER BY days_in_inventory DESC
 
 -- TOTAL INVENTORY VALUE
-SELECT COUNT(*) AS units,
+SELECT COUNT(DISTINCT vin) AS units,
        ROUND(SUM(try_cast(list_price AS DOUBLE)),2) AS total_list_value,
        ROUND(SUM(try_cast(cost AS DOUBLE)),2) AS total_cost_value
-FROM dms_inventory WHERE vehicle_status ILIKE '%stock%'
+FROM dms_inventory WHERE vehicle_status NOT ILIKE '%not in%'
 
 -- CERTIFIED VS NON-CERTIFIED
 SELECT CASE WHEN certification ILIKE '%certif%' THEN 'Certified' ELSE 'Non-Certified' END AS type,
-       COUNT(*) AS units
-FROM dms_inventory WHERE vehicle_status ILIKE '%stock%' GROUP BY 1
+       COUNT(DISTINCT vin) AS units
+FROM dms_inventory WHERE vehicle_status NOT ILIKE '%not in%' GROUP BY 1
 
 -- INVENTORY UNITS UNDER $15,000 WITH UNDER 50K MILES
 SELECT stock_number, vin, year, make, model, odometer, list_price, internet_price
 FROM dms_inventory
-WHERE vehicle_status ILIKE '%stock%'
-  AND try_cast(list_price AS DOUBLE) < 15000
+WHERE vehicle_status NOT ILIKE '%not in%'
+  AND try_cast(list_price AS DOUBLE) BETWEEN 1 AND 15000
   AND odometer < 50000
-ORDER BY list_price
+ORDER BY try_cast(list_price AS DOUBLE)
 
 -- FASTEST TURNING MODELS (sold quickest relative to time in inventory)
 SELECT i.make, i.model,
        ROUND(AVG(DATEDIFF('day', i.inventory_date, s.booked_date)),1) AS avg_days_to_sell,
-       COUNT(*) AS units_sold
+       COUNT(DISTINCT i.vin) AS units_sold
 FROM dms_inventory i JOIN dms_sales s ON i.vin = s.vin
 WHERE i.inventory_date IS NOT NULL AND s.booked_date IS NOT NULL
-GROUP BY i.make, i.model HAVING COUNT(*) >= 3 ORDER BY avg_days_to_sell
+GROUP BY i.make, i.model HAVING COUNT(DISTINCT i.vin) >= 3 ORDER BY avg_days_to_sell
 
 -- CUSTOMER-PAY VS WARRANTY MIX
 WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
@@ -1070,6 +1080,7 @@ SELECT i.stock_number, i.vin, i.year, i.make, i.model, i.exterior_color,
        i.odometer, i.list_price, i.open_ro_number
 FROM dms_inventory i
 WHERE i.open_ro_number IS NOT NULL AND TRIM(i.open_ro_number) != ''
+  AND i.vehicle_status NOT ILIKE '%not in%'
 
 -- VEHICLES WITH MULTIPLE ROs IN 30 DAYS
 WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%')
@@ -1224,7 +1235,7 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - ro_status for closed ROs: use ro_status ILIKE '%clos%' (not exact equality)
 - ro_status for open ROs: use ro_status NOT ILIKE '%clos%'
 - operation_code_descriptions is pipe-delimited (e.g. 'ELOF|MPI') — use ILIKE '%keyword%'
-- In dms_inventory: do NOT rely on sold_date IS NULL to mean in-stock; use vehicle_status ILIKE '%stock%'
+- In dms_inventory: vehicle_status is EMPTY STRING '' for active/in-stock units; 'NOT IN INVENTORY' for units no longer on the lot. NEVER use vehicle_status ILIKE '%stock%' — it returns 0. Use: vehicle_status NOT ILIKE '%not in%' OR vehicle_status = '' to mean "in stock/active"
 - customer_number is the join key for appointments, service, and sales (NOT in inventory)
 - Primary cross-table join key: VIN
 - To detect no-shows: appointment has ro_number IS NULL or ro_number = '' in dms_appointments
@@ -1266,7 +1277,7 @@ Sales synonyms → dms_sales:
   floor / flooring / floor plan → dms_inventory
 
 Inventory synonyms → dms_inventory:
-  on the lot / in stock / available cars / units on hand → vehicle_status ILIKE '%stock%'
+  on the lot / in stock / available cars / units on hand → vehicle_status NOT ILIKE '%not in%' (empty string = active; 'NOT IN INVENTORY' = gone)
   days on lot / aged / stale / sitting → DATEDIFF from inventory_date
   certified / CPO / certified pre-owned → certification ILIKE '%certif%'
   new → new_or_used ILIKE '%new%' (in dms_sales) or vehicle_type ILIKE '%new%' (in dms_inventory)
