@@ -101,7 +101,8 @@ def _load_dms_date_ranges() -> dict[str, dict]:
     return ranges
 
 
-DMS_DATE_RANGES: dict[str, dict] = _load_dms_date_ranges()
+# DMS_DATE_RANGES is populated after _create_dms_parquet_views is defined below.
+DMS_DATE_RANGES: dict[str, dict] = {}
 FORBIDDEN = r"\b(drop|delete|update|insert|alter|create|truncate|attach|detach|copy|grant|revoke)\b"
 
 # ---------------------------------------------------------------
@@ -459,6 +460,10 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
 def _register_dms_parquet_views(con: duckdb.DuckDBPyConnection) -> tuple[bool, str | None]:
     result = _create_dms_parquet_views(con, DMS_PARQUET_DIR_DEFAULT)
     return bool(result.get("loaded")), result.get("error")
+
+
+# Now that _create_dms_parquet_views is defined, populate the date ranges cache.
+DMS_DATE_RANGES.update(_load_dms_date_ranges())
 
 
 def _create_connection() -> duckdb.DuckDBPyConnection:
@@ -1166,6 +1171,47 @@ SELECT
   ROUND(100.0 * (t.revenue - l.revenue) / NULLIF(l.revenue,0), 1) AS revenue_change_pct,
   t.days_elapsed AS days_into_month
 FROM this_month t, last_month l
+
+-- MULTI-PART QUESTION: two separate aggregates from different tables in one query
+-- Example: "how many appointments were made last month and how many services were closed last month?"
+-- RULE: When a question asks for aggregates from TWO different tables, ALWAYS use a CTE combining both into ONE query that returns all answers in a single row.
+WITH
+anchor_appt AS (
+  SELECT DATE_TRUNC('month', MAX(appointment_date)) - INTERVAL 1 MONTH AS m_start,
+         DATE_TRUNC('month', MAX(appointment_date)) AS m_end
+  FROM dms_appointments
+),
+anchor_svc AS (
+  SELECT DATE_TRUNC('month', MAX(close_date)) - INTERVAL 1 MONTH AS m_start,
+         DATE_TRUNC('month', MAX(close_date)) AS m_end
+  FROM dms_service WHERE ro_status ILIKE '%clos%'
+),
+appts AS (
+  SELECT COUNT(DISTINCT appointment_number) AS appointments_last_month
+  FROM dms_appointments a, anchor_appt aa
+  WHERE a.appointment_date >= aa.m_start AND a.appointment_date < aa.m_end
+),
+services AS (
+  SELECT COUNT(DISTINCT ro_number) AS services_closed_last_month
+  FROM dms_service s, anchor_svc sa
+  WHERE s.close_date >= sa.m_start AND s.close_date < sa.m_end AND s.ro_status ILIKE '%clos%'
+)
+SELECT a.appointments_last_month, s.services_closed_last_month FROM appts a, services s
+
+-- MULTI-PART: "how many sales and how many service ROs this month?"
+WITH
+sales_this_month AS (
+  SELECT COUNT(DISTINCT deal_number) AS sales_count
+  FROM dms_sales WHERE booked_date >= DATE_TRUNC('month', (SELECT MAX(booked_date) FROM dms_sales))
+),
+service_this_month AS (
+  SELECT COUNT(DISTINCT ro_number) AS ro_count,
+         ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue
+  FROM dms_service
+  WHERE close_date >= DATE_TRUNC('month', (SELECT MAX(close_date) FROM dms_service WHERE ro_status ILIKE '%clos%'))
+    AND ro_status ILIKE '%clos%'
+)
+SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_this_month sr
 """.strip()
         dms_notes_block = """
 ━━━━━━━━━━━━━━━━━ SEARCH & QUERY RULES ━━━━━━━━━━━━━━━━━
@@ -1447,32 +1493,63 @@ def _build_no_results_message(question: str) -> str:
     """Return a friendly 'no results' message with the exact available date range."""
     q = (question or "").lower()
 
+    _time_words = [
+        "today", "yesterday", "this week", "last week", "this month", "last month",
+        "this year", "last year", "recent", "latest", "tonight", "morning", "pacing",
+    ]
+    asked_about_time = any(w in q for w in _time_words)
+
     if any(kw in q for kw in ["appoint", "booking", "scheduled"]):
         priority = ["dms_appointments", "dms_service"]
-    elif any(kw in q for kw in ["sale", "sold", "profit", "revenue", "booked"]):
+    elif any(kw in q for kw in ["sale", "sold", "profit", "deal"]):
         priority = ["dms_sales", "dms_service"]
-    elif any(kw in q for kw in ["inventory", "stock", "lot"]):
+    elif any(kw in q for kw in ["inventory", "stock", "lot", "unit"]):
         priority = ["dms_inventory"]
+    elif any(kw in q for kw in ["revenue", "service", "repair", "ro ", "advisor", "tech"]):
+        priority = ["dms_service", "dms_appointments"]
     else:
         priority = ["dms_service", "dms_appointments", "dms_sales"]
+
+    label_map = {
+        "dms_service": "service records",
+        "dms_appointments": "appointment records",
+        "dms_sales": "sales records",
+        "dms_inventory": "inventory records",
+    }
+
+    all_ranges = []
+    for table, label in label_map.items():
+        info = DMS_DATE_RANGES.get(table)
+        if info:
+            all_ranges.append(f"{label}: {_format_date_friendly(info['min'])} to {_format_date_friendly(info['max'])}")
 
     for table in priority:
         info = DMS_DATE_RANGES.get(table)
         if info:
-            label = {
-                "dms_service": "service records",
-                "dms_appointments": "appointment records",
-                "dms_sales": "sales records",
-                "dms_inventory": "inventory records",
-            }.get(table, "records")
+            label = label_map.get(table, "records")
             min_date = _format_date_friendly(info["min"])
             max_date = _format_date_friendly(info["max"])
+
+            if asked_about_time:
+                return (
+                    f"I couldn't find results for that timeframe. "
+                    f"My {label} only go from {min_date} to {max_date} — "
+                    f"I can only answer questions within that window. "
+                    f"Try rephrasing with a date that falls in that range!"
+                )
             return (
                 f"I couldn't find any results for that. "
                 f"Just so you know, I have {label} from {min_date} to {max_date}. "
-                f"I can only answer questions within that date range. "
-                f"Try adjusting the timeframe and ask again!"
+                f"Try adjusting the timeframe or rephrasing your question."
             )
+
+    if all_ranges:
+        ranges_text = ", ".join(all_ranges)
+        return (
+            f"I couldn't find any results for that. "
+            f"Here's what data I have: {ranges_text}. "
+            f"Try asking within one of those date ranges."
+        )
 
     return (
         "I couldn't find any results for that. "
@@ -1577,6 +1654,24 @@ def to_natural_language_answer(question: str, sql: str, out: pd.DataFrame) -> st
     return f"Found {n} result{'s' if n != 1 else ''} matching your question."
 
 
+def _build_data_coverage_note() -> str:
+    """Build a one-line data coverage note for inclusion in the answer prompt."""
+    parts = []
+    labels = {
+        "dms_service": "service ROs",
+        "dms_appointments": "appointments",
+        "dms_sales": "sales",
+        "dms_inventory": "inventory",
+    }
+    for table, label in labels.items():
+        info = DMS_DATE_RANGES.get(table)
+        if info:
+            parts.append(f"{label}: {_format_date_friendly(info['min'])} to {_format_date_friendly(info['max'])}")
+    if parts:
+        return "Available data ranges: " + " | ".join(parts)
+    return ""
+
+
 def generate_detailed_answer(
     question: str,
     sql: str,
@@ -1591,17 +1686,35 @@ def generate_detailed_answer(
     cols = [str(c) for c in out.columns]
     row_count = int(len(out))
     sample_csv = _format_result_sample_for_llm(out)
+    coverage_note = _build_data_coverage_note()
+
+    # Detect whether question uses relative time words so we can prompt Claude to clarify
+    time_relative = any(w in q.lower() for w in [
+        "today", "yesterday", "this week", "last week", "this month", "last month",
+        "this year", "last year", "recent", "latest", "current", "now", "tonight",
+        "this morning", "pacing", "ahead", "behind",
+    ])
+
+    time_clarification_rule = (
+        "- IMPORTANT: This question uses a relative time word (today, last week, last month, etc.). "
+        "The data does NOT go up to today's real date. Always start your answer by stating the actual "
+        "date range used — e.g. 'For last month (Dec 2025 to Jan 2026)...' or 'Looking at the most "
+        "recent week in the data (Jan 27 – Feb 2)...'. This way the user knows exactly what period "
+        "the answer covers.\n"
+    ) if time_relative else ""
 
     user_prompt = f"""
 You are Atlas AI, a trusted advisor for this car dealership. You know the dealership's data inside-out and speak like a seasoned manager — direct, specific, and helpful.
 
 Answer the question using ONLY the data below. No hallucinations — stick to the numbers provided.
 
+{coverage_note}
+
 RULES:
 - Write in plain conversational prose. No markdown, no asterisks, no bullet points, no bold.
 - 2 to 4 sentences max.
 - Lead with the key number or finding right away (e.g. "We closed 847 repair orders last month...").
-- Translate the data into business meaning — what does this number mean for the dealership?
+{time_clarification_rule}- Translate the data into business meaning — what does this number mean for the dealership?
 - If results show a comparison (e.g. this week vs last week), highlight the trend and % change.
 - If it's a list/show request, say what was found and that the full table is shown below.
 - End with ONE short, specific action the dealership could take based on the data (only if it adds value — skip for simple count/list questions).
