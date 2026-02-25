@@ -1,0 +1,25 @@
+# Environment variables — never commit real keys
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build output
+dist/
+build/
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python virtualenv
+venv/
+.venv/
+backend/__pycache__/

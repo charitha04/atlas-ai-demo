@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design system CSS variables (mirror Tailwind tokens from Figma) */
+:root {
+  --color-page: #f4f4f4;
+  --color-surface-container: #ffffff;
+  --color-surface-stroke: #dcdcdc;
+  --color-text-default: #111115;
+  --color-text-muted: #6f6f77;
+  --color-text-subtle: #4e4e55;
+  --color-primary: #1a9375;
+  --color-primary-secondary: #126550;
+}
+
+/* Base layout and typography */
+html, body, #root {
+  height: 100%;
+  font-family: 'Barlow', 'Instrument Sans', sans-serif;
+}
+
+/* Leaflet Map Styles */
+.leaflet-container {
+  font-family: inherit;
+}
+
+.custom-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+.custom-marker div {
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+.leaflet-marker-icon {
+  transition: none !important;
+  animation: none !important;
+}
+
+.leaflet-zoom-animated {
+  transition: none !important;
+}
+
+.custom-car-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Geofence Tooltip Styles (token-aligned: uses --color-text-default for dark tooltip bg) */
+.geofence-tooltip {
+  background-color: var(--color-text-default) !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
+.geofence-tooltip:before {
+  border-top-color: var(--color-text-default) !important;
+}
+
+/* Animation utilities for AI Search Result Summarizer */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Smooth transitions for interactive elements */
+.transition-smooth {
+  transition: all 0.2s ease-in-out;
+}

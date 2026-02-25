@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+duckdb
+pandas
+numpy
+anthropic
+python-dotenv
+joblib
+scikit-learn
