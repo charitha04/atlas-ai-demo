@@ -811,6 +811,38 @@ CROSS-TABLE JOINS (very important — use these patterns when questions involve 
    Join with dms_appointments to get show rates per advisor.
 
 The primary join key across all DMS tables is VIN. customer_number is shared between appointments, service, and sales (NOT inventory).
+
+SYNONYMS — understand these layman/alternate terms and map them to the correct columns/tables:
+
+Service & Repair synonyms → use dms_service, filter on operation_code_descriptions ILIKE '%keyword%':
+  "oil change", "lube", "lube job", "giffy lube", "jiffy lube", "oil and filter" → oil change service
+  "tire rotation", "tires", "flat tire", "tire repair" → tire-related service
+  "brake job", "brakes", "brake pads", "stopping power" → brake service
+  "car shop", "repair shop", "fix shop", "mechanic", "body shop", "service center" → service visit
+  "multi-point", "mpi", "inspection", "check-up", "checkup", "look over" → inspection
+  "recall fix", "recall repair", "safety fix" → recall-related service
+
+Appointment synonyms → use dms_appointments:
+  "booking", "scheduled visit", "set up an appointment", "booked in", "coming in" → appointment
+
+Sales synonyms → use dms_sales:
+  "purchased", "bought", "deal", "transaction", "sold a car", "unit sold" → vehicle sale
+  "gross", "front end", "back end", "F&I", "finance" → profit-related columns
+
+Inventory synonyms → use dms_inventory:
+  "on the lot", "in stock", "available cars", "floor plan", "units on hand" → inventory
+  "days on lot", "aged unit", "stale inventory" → days since inventory_date
+
+Customer synonyms → map to customer_name or customer_number:
+  "buyer", "owner", "driver", "client", "guest", "contact" → customer
+
+Time synonyms — ALWAYS anchor to latest date in data, not CURRENT_DATE:
+  "yesterday", "last night", "today", "this morning" → most recent day in the relevant table
+  "this week", "current week" → week containing MAX(date) in the table
+  "last week", "previous week" → week before MAX(date)
+  "this month", "current month" → month of MAX(date)
+  "last month", "previous month" → month before MAX(date)
+  "recent", "latest", "newest", "most recent" → ORDER BY date DESC LIMIT N
 """.strip()
         if RETENTION_DATA_AVAILABLE:
             dms_tables_block += "\n6) customer_retention (synthetic retention dataset)"
@@ -972,14 +1004,46 @@ def run_question(
     finally:
         con.close()
 
+    # Retry once with relaxed filters if we got empty results
+    if result_df.empty:
+        logger.info("[SQL] Empty result — retrying with relaxed filters")
+        retry_prompt = (
+            build_prompt(question, conversation_history=conversation_history)
+            + "\n\nNOTE: The previous query returned 0 rows. "
+            "Relax strict filters: remove specific date conditions, use ILIKE instead of =, "
+            "try broader LIKE '%keyword%' patterns, remove extra WHERE clauses. "
+            "If joining tables, try a LEFT JOIN. Return a broader query."
+        )
+        try:
+            raw_sql2 = _call_llm_for_sql(retry_prompt, model_name)
+            sql2 = validate_sql(raw_sql2)
+            con2 = _create_connection()
+            try:
+                result_df2 = con2.execute(sql2).df()
+            finally:
+                con2.close()
+            if not result_df2.empty:
+                logger.info("[SQL] Retry succeeded with %d rows", len(result_df2))
+                return sql2, result_df2
+        except Exception as retry_exc:
+            logger.warning("[SQL] Retry failed: %s", retry_exc)
+
     return sql, result_df
 
 
+def _format_date_friendly(date_str: str) -> str:
+    """Convert '2024-01-02' to 'Jan 2, 2024'."""
+    try:
+        from datetime import datetime
+        return datetime.strptime(str(date_str), "%Y-%m-%d").strftime("%b %d, %Y")
+    except Exception:
+        return str(date_str)
+
+
 def _build_no_results_message(question: str) -> str:
-    """Return a friendly 'no results' message that tells the user what date range we have."""
+    """Return a friendly 'no results' message with the exact available date range."""
     q = (question or "").lower()
 
-    # Pick the most relevant table based on question keywords
     if any(kw in q for kw in ["appoint", "booking", "scheduled"]):
         priority = ["dms_appointments", "dms_service"]
     elif any(kw in q for kw in ["sale", "sold", "profit", "revenue", "booked"]):
@@ -998,16 +1062,78 @@ def _build_no_results_message(question: str) -> str:
                 "dms_sales": "sales records",
                 "dms_inventory": "inventory records",
             }.get(table, "records")
+            min_date = _format_date_friendly(info["min"])
+            max_date = _format_date_friendly(info["max"])
             return (
-                f"I couldn't find any results for that. Just so you know, I have {label} "
-                f"from {info['min']} to {info['max']}, so I can only answer questions within that period. "
-                f"Try adjusting the date range and ask again!"
+                f"I couldn't find any results for that. "
+                f"Just so you know, I have {label} from {min_date} to {max_date}. "
+                f"I can only answer questions within that date range. "
+                f"Try adjusting the timeframe and ask again!"
             )
 
-    # Fallback if no ranges loaded
     return (
         "I couldn't find any results for that. "
-        "Try broadening the date range or rephrasing the question."
+        "Try broadening the date range or rephrasing your question."
+    )
+
+
+# ---------------------------------------------------------------
+# Out-of-scope detection
+# ---------------------------------------------------------------
+_OUT_OF_SCOPE_PATTERNS = [
+    r"\b(weather|temperature|forecast|news|sports|stock\s+market|crypto|bitcoin)\b",
+    r"\b(recipe|cook|food|restaurant|hotel|flight|travel|vacation)\b",
+    r"\b(write\s+(me\s+)?(a\s+)?(poem|story|essay|letter|code))\b",
+    r"\b(what\s+is\s+the\s+capital|when\s+was\s+\w+\s+born|where\s+is\s+\w+\s+located)\b",
+    r"\b(translate|language|math|equation|physics|chemistry)\b",
+    r"\b(movie|music|song|artist|actor|celebrity|game|sport\s+score)\b",
+    r"\b(president|politics|election|government|country)\b",
+    r"\b(instagram|twitter|facebook|social\s+media|tiktok)\b",
+]
+
+_DEALERSHIP_KEYWORDS = [
+    "repair", "service", "oil", "tire", "brake", "appointment", "customer", "vehicle",
+    "car", "truck", "vin", "ro ", "repair order", "invoice", "sale", "sold", "inventory",
+    "stock", "advisor", "technician", "dealership", "dealer", "nissan", "retention",
+    "revenue", "profit", "parts", "maintenance", "inspection", "mileage", "recall",
+    "stephen wade", "dms", "how many", "how much", "list", "show", "count", "average",
+    "top ", "which", "who", "when", "compare", "week", "month", "year", "last", "recent",
+    "yesterday", "today", "jiffy", "shop", "mechanic", "lube", "fix", "fixed",
+]
+
+
+def _is_out_of_scope(question: str) -> bool:
+    q = (question or "").lower()
+    if any(kw in q for kw in _DEALERSHIP_KEYWORDS):
+        return False
+    return any(re.search(p, q, re.IGNORECASE) for p in _OUT_OF_SCOPE_PATTERNS)
+
+
+def _build_out_of_scope_message() -> str:
+    """Tell the user what the bot can and cannot answer, with actual data ranges."""
+    table_labels = {
+        "dms_service": "Service & Repair Orders",
+        "dms_appointments": "Appointments",
+        "dms_sales": "Vehicle Sales",
+        "dms_inventory": "Inventory",
+    }
+    lines: list[str] = []
+    for table, label in table_labels.items():
+        info = DMS_DATE_RANGES.get(table)
+        if info:
+            min_d = _format_date_friendly(info["min"])
+            max_d = _format_date_friendly(info["max"])
+            lines.append(f"  - {label}: {min_d} to {max_d}")
+
+    data_block = "\n".join(lines) if lines else "  - Dealership operational data"
+    return (
+        "I'm Atlas AI, a dealership assistant. I can only answer questions about this dealership's data.\n\n"
+        f"Here's what I have access to:\n{data_block}\n\n"
+        "Try asking things like:\n"
+        "  - How many repair orders were closed last month?\n"
+        "  - Which service advisor handled the most ROs?\n"
+        "  - Show me recent vehicle sales\n"
+        "  - How many appointments did we have this week?"
     )
 
 
@@ -1064,24 +1190,26 @@ def generate_detailed_answer(
     sample_csv = _format_result_sample_for_llm(out)
 
     user_prompt = f"""
-You are Atlas AI, a friendly and knowledgeable assistant for a car dealership.
+You are Atlas AI, a trusted advisor for this car dealership. You know the dealership's data inside-out and speak like a seasoned manager — direct, specific, and helpful.
 
-Answer the user's question in a warm, conversational tone — like a knowledgeable colleague who happens to know the data well. Be direct and clear. No jargon.
+Answer the question using ONLY the data below. No hallucinations — stick to the numbers provided.
 
-Rules:
-- Use ONLY the data provided below. Do not invent numbers.
-- Write plain prose. No markdown (no **, no #, no bullet dashes, no asterisks).
-- Keep it to 1–3 sentences. Be concise but natural.
-- If it's a single number answer, lead with the number in a natural sentence, then add a brief helpful observation.
-- If the user asked to "show" or "list" data, briefly describe what was found (the table is already shown separately, so just summarise — e.g. "I found 47 repair orders from last month. Here's the full list below.").
-- Never mention SQL, queries, or technical terms. Just answer the question as if you know the dealership data.
+RULES:
+- Write in plain conversational prose. No markdown, no asterisks, no bullet points, no bold.
+- 2 to 4 sentences max.
+- Lead with the key number or finding right away (e.g. "We closed 847 repair orders last month...").
+- Translate the data into business meaning — what does this number mean for the dealership?
+- If results show a comparison (e.g. this week vs last week), highlight the trend and % change.
+- If it's a list/show request, say what was found and that the full table is shown below.
+- End with ONE short, specific action the dealership could take based on the data (only if it adds value — skip for simple count/list questions).
+- Never mention SQL, queries, columns, or technical terms.
 
 User question: {q}
 
 Data:
 - Total rows: {row_count}
 - Columns: {cols}
-- Sample (first {min(row_count, 20)} rows as CSV):
+- Sample (first {min(row_count, 20)} rows):
 {sample_csv}
 """.strip()
 
@@ -1388,6 +1516,9 @@ def answer_question(
     rows is a list of dicts (up to 200 rows) when a SQL query was executed,
     empty list otherwise (strategy mode, metadata, or error).
     """
+    if _is_out_of_scope(question):
+        return _build_out_of_scope_message(), "-- Out of scope", False, []
+
     if _is_strategy_question(question, conversation_history):
         answer = _generate_strategy_answer(question, model_name, conversation_history)
         return answer, "-- Strategy mode (no SQL executed)", True, []
