@@ -11,6 +11,7 @@ import os
 import re
 import json
 import logging
+import threading
 from pathlib import Path
 
 import duckdb
@@ -467,6 +468,7 @@ DMS_DATE_RANGES.update(_load_dms_date_ranges())
 
 
 def _create_connection() -> duckdb.DuckDBPyConnection:
+    """Create a fresh DuckDB connection with all views registered."""
     con = duckdb.connect()
     con.register("dms_vehicle_data", dms_vehicle_df)
     con.register("dms_open_ro", dms_open_ro_df)
@@ -475,6 +477,21 @@ def _create_connection() -> duckdb.DuckDBPyConnection:
     if DMS_PARQUET_AVAILABLE:
         _register_dms_parquet_views(con)
     return con
+
+
+# ---------------------------------------------------------------
+# Persistent connection pool (one connection per thread)
+# Avoids re-building views on every query while staying thread-safe.
+# ---------------------------------------------------------------
+_thread_local = threading.local()
+_thread_local_lock = threading.Lock()
+
+
+def _get_connection() -> duckdb.DuckDBPyConnection:
+    """Return a thread-local DuckDB connection, creating it once per thread."""
+    if not getattr(_thread_local, "con", None):
+        _thread_local.con = _create_connection()
+    return _thread_local.con
 
 
 # ---------------------------------------------------------------
@@ -1435,13 +1452,14 @@ def _call_provider(
     user_prompt: str,
     model_name: str,
     temperature: float = 0,
+    max_tokens: int = 2048,
 ) -> str:
     config = MODEL_OPTIONS.get(model_name) or next(iter(MODEL_OPTIONS.values()))
     model = config["model"]
 
     resp = anthropic_client.messages.create(
         model=model,
-        max_tokens=2048,
+        max_tokens=max_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=temperature,
@@ -1450,11 +1468,13 @@ def _call_provider(
 
 
 def _call_llm_for_sql(prompt: str, model_name: str) -> str:
+    # SQL rarely exceeds ~300 tokens; lower max_tokens means faster API response.
     return _call_provider(
         system_prompt="Translate natural language into SQL. Return only a SQL SELECT query.",
         user_prompt=prompt,
         model_name=model_name,
         temperature=0,
+        max_tokens=600,
     )
 
 
@@ -1469,11 +1489,8 @@ def run_question(
     sql = validate_sql(raw_sql)
     logger.info("[SQL] Validated: %s", sql)
 
-    con = _create_connection()
-    try:
-        result_df = con.execute(sql).df()
-    finally:
-        con.close()
+    con = _get_connection()
+    result_df = con.execute(sql).df()
 
     # Retry once with relaxed filters if we got empty results
     if result_df.empty:
@@ -1488,11 +1505,8 @@ def run_question(
         try:
             raw_sql2 = _call_llm_for_sql(retry_prompt, model_name)
             sql2 = validate_sql(raw_sql2)
-            con2 = _create_connection()
-            try:
-                result_df2 = con2.execute(sql2).df()
-            finally:
-                con2.close()
+            con2 = _get_connection()
+            result_df2 = con2.execute(sql2).df()
             if not result_df2.empty:
                 logger.info("[SQL] Retry succeeded with %d rows", len(result_df2))
                 return sql2, result_df2
@@ -2216,6 +2230,33 @@ def build_chart_config(df: pd.DataFrame, question: str) -> dict | None:
 # ---------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------
+def _prewarm() -> None:
+    """Pre-warm the Anthropic TCP connection and thread-local DuckDB connection.
+
+    Runs in a background thread at startup so the first real user query
+    doesn't pay the cold-start penalty.
+    """
+    import time
+    try:
+        _get_connection()
+        logger.info("[prewarm] DuckDB connection ready")
+    except Exception as exc:
+        logger.warning("[prewarm] DuckDB warm-up failed: %s", exc)
+
+    try:
+        anthropic_client.messages.create(
+            model=next(iter(MODEL_OPTIONS.values()))["model"],
+            max_tokens=1,
+            system="ping",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        logger.info("[prewarm] Anthropic connection ready")
+    except Exception as exc:
+        logger.warning("[prewarm] Anthropic warm-up failed: %s", exc)
+
+
+threading.Thread(target=_prewarm, daemon=True, name="prewarm").start()
+
 app = FastAPI(title="Ikon DMS Chatbot API")
 
 app.add_middleware(
