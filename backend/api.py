@@ -314,7 +314,14 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("State","state")}, {raw_expr("Zip","zip")},
             {raw_expr("Appointment Date","appointment_date_raw")}, {date_expr("Appointment Date","appointment_date")},
             {raw_expr("Appointment Create Date","appointment_create_date_raw")},
-            {date_expr("Appointment Create Date","appointment_create_date")}
+            {date_expr("Appointment Create Date","appointment_create_date")},
+            {raw_expr("RO Number","ro_number")},
+            {raw_expr("Promise Date","promise_date_raw")}, {date_expr("Promise Date","promise_date")},
+            {raw_expr("Promise Time","promise_time")},
+            {raw_expr("Estimate Amount","estimate_amount")},
+            {raw_expr("Loaner Flag","loaner_flag")},
+            {raw_expr("Waiting Flag","waiting_flag")},
+            {raw_expr("Sale Type","sale_type")}
         FROM read_parquet('{parquet_glob("appointments")}')
     """)
 
@@ -323,13 +330,27 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
         SELECT
             {raw_expr("VIN","vin")}, {raw_expr("Customer Number","customer_number")},
             {raw_expr("Full Name","customer_name")}, {raw_expr("RO Number","ro_number")},
+            {raw_expr("RO Status","ro_status")}, {raw_expr("RO Department","ro_department")},
             {raw_expr("Open Date","open_date_raw")}, {date_expr("Open Date","open_date")},
             {raw_expr("Close Date","close_date_raw")}, {date_expr("Close Date","close_date")},
+            {raw_expr("Promise Date","promise_date_raw")}, {date_expr("Promise Date","promise_date")},
+            {raw_expr("Pickup Date","pickup_date_raw")}, {date_expr("Pickup Date","pickup_date")},
             {raw_expr("RO Mileage","ro_mileage")}, {raw_expr("Mileage Out","mileage_out")},
             {raw_expr("Operation Codes","operation_codes")},
             {raw_expr("Operation Code Descriptions","operation_code_descriptions")},
+            {raw_expr("Operation Sale Types","operation_sale_types")},
+            {raw_expr("Recommendations","recommendations")},
+            {raw_expr("Recommended Operation Codes","recommended_operation_codes")},
             {raw_expr("Part Description","part_description")}, {raw_expr("Part Number","part_number")},
-            {raw_expr("Service Advisor Name","service_advisor_name")}, {raw_expr("Payment Method","payment_method")},
+            {raw_expr("Service Advisor Name","service_advisor_name")},
+            {raw_expr("Tech Name","tech_name")}, {raw_expr("Tech Number","tech_number")},
+            {raw_expr("Labor Bill Hours","labor_bill_hours")},
+            {raw_expr("Labor Tech Hours","labor_tech_hours")},
+            {raw_expr("Labor Bill Rate","labor_bill_rate")},
+            {raw_expr("Labor Tech Rate","labor_tech_rate")},
+            {raw_expr("Appointment Flag","appointment_flag")},
+            {raw_expr("Upsell","upsell")},
+            {raw_expr("Payment Method","payment_method")},
             {raw_expr("Stock Number","stock_number")}, {raw_expr("Make","make")},
             {raw_expr("Model","model")}, {raw_expr("Year","year")},
             {raw_expr("Exterior Color","exterior_color")}, {raw_expr("New/Used","new_or_used")},
@@ -337,11 +358,22 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("City","city")}, {raw_expr("State","state")}, {raw_expr("Zip","zip")},
             {raw_expr("Customer Labor Sale","customer_labor_sale")},
             {raw_expr("Customer Parts Sale","customer_parts_sale")},
+            {raw_expr("Customer Misc Sale","customer_misc_sale")},
+            {raw_expr("Customer Sublet Sale","customer_sublet_sale")},
             {raw_expr("Customer Total Cost","customer_total_cost")},
             {raw_expr("Customer Total Sale","customer_total_sale")},
             {raw_expr("Total Sale","total_sale")}, {raw_expr("Total Cost","total_cost")},
+            {raw_expr("Total Labor Sale","total_labor_sale")},
+            {raw_expr("Total Parts Sale","total_parts_sale")},
+            {raw_expr("Total Misc Sale","total_misc_sale")},
+            {raw_expr("Total Sublet Sale","total_sublet_sale")},
+            {raw_expr("Total Gas/Oil/Grease Sale","total_gas_oil_grease_sale")},
             {raw_expr("Warranty Total Sale","warranty_total_sale")},
-            {raw_expr("Internal Total Sale","internal_total_sale")}
+            {raw_expr("Warranty Labor Sale","warranty_labor_sale")},
+            {raw_expr("Warranty Parts Sale","warranty_parts_sale")},
+            {raw_expr("Internal Total Sale","internal_total_sale")},
+            {raw_expr("Internal Labor Sale","internal_labor_sale")},
+            {raw_expr("Internal Parts Sale","internal_parts_sale")}
         FROM read_parquet('{parquet_glob("service")}')
     """)
 
@@ -351,11 +383,15 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("VIN","vin")}, {raw_expr("Stock Number","stock_number")},
             {raw_expr("Make","make")}, {raw_expr("Model","model")}, {raw_expr("Year","year")},
             {raw_expr("Trim","trim")}, {raw_expr("Vehicle Status","vehicle_status")},
+            {raw_expr("Vehicle Type","vehicle_type")}, {raw_expr("Category","category")},
+            {raw_expr("Certification","certification")},
             {raw_expr("Location","location")}, {raw_expr("Description","description")},
             {raw_expr("Odometer","odometer")}, {raw_expr("List Price","list_price")},
             {raw_expr("Internet Price","internet_price")}, {raw_expr("MSRP","msrp")},
+            {raw_expr("Cost","cost")}, {raw_expr("Wholesale","wholesale")},
             {raw_expr("Exterior Color","exterior_color")}, {raw_expr("Interior Color","interior_color")},
             {raw_expr("Fuel Type","fuel_type")}, {raw_expr("Transmission","transmission")},
+            {raw_expr("Open RO Number","open_ro_number")},
             {raw_expr("dealer_name","dealer_name")}, {raw_expr("DV Dealer ID","dv_dealer_id")},
             {raw_expr("Inventory Date","inventory_date_raw")}, {date_expr("Inventory Date","inventory_date")},
             {raw_expr("Sold Date","sold_date_raw")}, {date_expr("Sold Date","sold_date")},
@@ -368,12 +404,25 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
         SELECT
             {raw_expr("VIN","vin")}, {raw_expr("Customer Number","customer_number")},
             {raw_expr("Full Name","customer_name")}, {raw_expr("Stock Number","stock_number")},
+            {raw_expr("Deal Number","deal_number")}, {raw_expr("Deal Status","deal_status")},
+            {raw_expr("Deal Type","deal_type")}, {raw_expr("Sale Type","sale_type")},
+            {raw_expr("New/Used","new_or_used")},
             {raw_expr("Make","make")}, {raw_expr("Model","model")}, {raw_expr("Year","year")},
-            {raw_expr("Mileage","mileage")}, {raw_expr("List Price","list_price")},
-            {raw_expr("Gross Profit","gross_profit")}, {raw_expr("Total Profit","total_profit")},
+            {raw_expr("Mileage","mileage")}, {raw_expr("Sales Price","sales_price")},
+            {raw_expr("List Price","list_price")}, {raw_expr("MSRP","msrp")},
             {raw_expr("Front Gross","front_gross")}, {raw_expr("Back Gross","back_gross")},
+            {raw_expr("Gross Profit","gross_profit")}, {raw_expr("Total Profit","total_profit")},
+            {raw_expr("Finance Profit","finance_profit")},
+            {raw_expr("Finance Reserve","finance_reserve")},
+            {raw_expr("Total Warranty Profit","total_warranty_profit")},
+            {raw_expr("Salesman 1 Name","salesman_1_name")},
+            {raw_expr("Salesman 2 Name","salesman_2_name")},
+            {raw_expr("Finance Manager Name","finance_manager_name")},
+            {raw_expr("Closing Manager Name","closing_manager_name")},
             {raw_expr("City","city")}, {raw_expr("State","state")},
             {raw_expr("dealer_name","dealer_name")}, {raw_expr("DV Dealer ID","dv_dealer_id")},
+            {raw_expr("Contract Date","contract_date_raw")}, {date_expr("Contract Date","contract_date")},
+            {raw_expr("Delivery Date","delivery_date_raw")}, {date_expr("Delivery Date","delivery_date")},
             {raw_expr("Booked Date","booked_date_raw")}, {date_expr("Booked Date","booked_date")},
             {raw_expr("Accounting Date","accounting_date_raw")}, {date_expr("Accounting Date","accounting_date")}
         FROM read_parquet('{parquet_glob("sales")}')
@@ -698,151 +747,505 @@ def build_prompt(question: str, conversation_history: list[dict] | None = None) 
 """.rstrip()
         dms_rules_table_list = "dms_appointments, dms_service, dms_inventory, dms_sales, dms_events"
         dms_schema_block = """
-dms_appointments columns:
-- vin, customer_number, customer_name, appointment_number
-- appointment_date (DATE), appointment_date_raw (string m/d/YYYY)
-- appointment_create_date (DATE), appointment_create_date_raw
-- appointment_time, appointment_mileage
-- operation_code_description (string: what service was booked, e.g. 'ELOF - EXPRESS LUBE, OIL & FILTER SERVICE')
-- service_advisor_name
-- make, model, year, exterior_color
-- dealer_name, dv_dealer_id
-- city, state, zip
+━━━━━━━━━━━━━━━━━ TABLE SCHEMAS ━━━━━━━━━━━━━━━━━
 
-dms_service columns:
-- vin, customer_number, customer_name, ro_number
-- open_date (DATE), open_date_raw (string m/d/YYYY)
-- close_date (DATE), close_date_raw (string m/d/YYYY)
-- ro_mileage, mileage_out
-- operation_codes (pipe-delimited codes, e.g. 'TR|MPI')
-- operation_code_descriptions (pipe-delimited text, e.g. 'REPAIR TIRE|MULTI POINT INSPECTION')
-- part_description (pipe-and-caret-delimited, e.g. 'OIL FILTER^MOBIL SUPER SYN 0')
-- part_number, service_advisor_name, payment_method
-- stock_number, make, model, year, exterior_color, new_or_used
-- dealer_name, dv_dealer_id, city, state, zip
-- customer_labor_sale, customer_parts_sale, customer_total_cost, customer_total_sale
-- total_sale, total_cost, warranty_total_sale, internal_total_sale
+dms_service (repair orders — one row per operation line per RO):
+  Identity:     vin, customer_number, customer_name, ro_number
+  Status:       ro_status ('Open'|'Closed'), ro_department
+  Dates:        open_date (DATE), close_date (DATE), promise_date (DATE), pickup_date (DATE)
+  Tech/Advisor: service_advisor_name, tech_name, tech_number
+  Hours:        labor_bill_hours, labor_tech_hours (VARCHAR — cast to DOUBLE for math)
+  Rates:        labor_bill_rate, labor_tech_rate (VARCHAR — cast to DOUBLE)
+  Operations:   operation_codes (pipe-delimited e.g. 'ELOF|MPI'), operation_code_descriptions,
+                operation_sale_types (pipe-delimited e.g. 'C|C' — C=customer, W=warranty, I=internal)
+  Declined:     recommendations, recommended_operation_codes (services advisor suggested but customer declined)
+  Flags:        appointment_flag ('Y'/'N'), upsell ('Y'/'N')
+  Parts:        part_description, part_number
+  Payment:      payment_method
+  Vehicle:      make, model, year, exterior_color, new_or_used, stock_number, ro_mileage, mileage_out
+  Revenue (all VARCHAR — use try_cast(x AS DOUBLE)):
+    customer_labor_sale, customer_parts_sale, customer_misc_sale, customer_sublet_sale,
+    customer_total_sale (= customer-pay revenue per line)
+    total_sale, total_cost (= total RO line revenue)
+    total_labor_sale, total_parts_sale, total_misc_sale, total_sublet_sale
+    total_gas_oil_grease_sale
+    warranty_total_sale, warranty_labor_sale, warranty_parts_sale
+    internal_total_sale, internal_labor_sale, internal_parts_sale
+  Location:     dealer_name, dv_dealer_id, city, state, zip
 
-dms_inventory columns:
-- vin, stock_number
-- make, model, year, trim, description
-- vehicle_status, location
-- odometer
-- list_price, internet_price, msrp
-- exterior_color, interior_color, fuel_type, transmission
-- inventory_date (DATE), inventory_date_raw
-- sold_date (DATE, null if not sold), sold_date_raw
-- purchase_date (DATE), purchase_date_raw
-- dealer_name, dv_dealer_id
+dms_appointments (booked appointments — one row per appointment):
+  Identity:     vin, customer_number, customer_name, appointment_number
+  Dates:        appointment_date (DATE), appointment_create_date (DATE), promise_date (DATE)
+  Times:        appointment_time, promise_time
+  Advisor:      service_advisor_name
+  Service:      operation_code_description (what was booked)
+  Flags:        loaner_flag ('Y'/'N'), waiting_flag ('Y'/'N')
+  RO link:      ro_number (NULL if no RO was opened → means no-show)
+  Estimate:     estimate_amount (VARCHAR)
+  Sale type:    sale_type
+  Vehicle:      make, model, year, exterior_color, appointment_mileage
+  Location:     dealer_name, dv_dealer_id, city, state, zip
 
-dms_sales columns:
-- vin, customer_number, customer_name, stock_number
-- make, model, year, mileage
-- list_price, gross_profit, total_profit, front_gross, back_gross
-- booked_date (DATE), booked_date_raw
-- accounting_date (DATE), accounting_date_raw
-- city, state, dealer_name, dv_dealer_id
+dms_inventory (vehicle inventory snapshot — one row per stock number):
+  Identity:     vin, stock_number
+  Vehicle:      make, model, year, trim, description, vehicle_type, category
+  Status:       vehicle_status (e.g. 'In Stock', 'Sold', 'On Order'), certification ('Certified'|'')
+  Odometer:     odometer (INTEGER)
+  Pricing (all VARCHAR — cast to DOUBLE):
+    list_price, internet_price, msrp, cost, wholesale
+  Colors:       exterior_color, interior_color
+  Specs:        fuel_type, transmission
+  Dates:        inventory_date (DATE), sold_date (DATE), purchase_date (DATE)
+  Service link: open_ro_number (VINs with an open RO in the shop)
+  Location:     location, dealer_name, dv_dealer_id
 
-dms_events columns (unified stream):
-- source_dataset (appointments|service|inventory|sales)
-- vin, customer_number, customer_name
-- event_date (DATE), event_date_raw
-- ro_number, appointment_number
-- service_description (text describing the service/operation; from operation_code_description or operation_code_descriptions)
-- make, model, year, dealer_name, dv_dealer_id
+dms_sales (vehicle sales — one row per deal):
+  Identity:     vin, customer_number, customer_name, stock_number, deal_number
+  Deal:         deal_status, deal_type, sale_type, new_or_used
+  Vehicle:      make, model, year, mileage
+  Pricing (all VARCHAR — cast to DOUBLE):
+    sales_price, list_price, msrp
+    front_gross, back_gross, gross_profit, total_profit
+    finance_profit, finance_reserve, total_warranty_profit
+  People:       salesman_1_name, salesman_2_name, finance_manager_name, closing_manager_name
+  Dates:        booked_date (DATE), accounting_date (DATE), contract_date (DATE), delivery_date (DATE)
+  Location:     city, state, dealer_name, dv_dealer_id
+
+dms_events (unified activity stream across all 4 tables):
+  source_dataset, vin, customer_number, customer_name
+  event_date (DATE), ro_number, appointment_number, service_description
+  make, model, year, dealer_name, dv_dealer_id
+
+━━━━━━━━━━━━━━━━━ SQL EXAMPLES BY QUESTION TYPE ━━━━━━━━━━━━━━━━━
+
+-- SERVICE REVENUE TODAY / MOST RECENT DAY
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue,
+       COUNT(DISTINCT ro_number) AS ro_count
+FROM dms_service WHERE close_date = (SELECT latest FROM anchor) AND ro_status ILIKE '%clos%'
+
+-- SERVICE REVENUE THIS WEEK VS LAST WEEK
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+     week_start AS (SELECT DATE_TRUNC('week', (SELECT latest FROM anchor)) AS ws)
+SELECT
+  CASE WHEN close_date >= (SELECT ws FROM week_start) THEN 'This Week' ELSE 'Last Week' END AS week_label,
+  COUNT(DISTINCT ro_number) AS total_ros,
+  ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS customer_pay_revenue
+FROM dms_service
+WHERE close_date >= (SELECT ws FROM week_start) - INTERVAL 7 DAY
+  AND close_date < (SELECT ws FROM week_start) + INTERVAL 7 DAY
+  AND ro_status ILIKE '%clos%'
+GROUP BY 1 ORDER BY 1
+
+-- AVERAGE RO VALUE (effective revenue per closed RO)
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS month_start FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)) / NULLIF(COUNT(DISTINCT ro_number),0),2) AS avg_ro_value,
+       COUNT(DISTINCT ro_number) AS total_ros
+FROM dms_service
+WHERE close_date >= (SELECT month_start FROM anchor) AND ro_status ILIKE '%clos%'
+
+-- EFFECTIVE LABOR RATE (total labor revenue ÷ billed hours)
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT ROUND(SUM(try_cast(total_labor_sale AS DOUBLE)) / NULLIF(SUM(try_cast(labor_bill_hours AS DOUBLE)),0),2) AS effective_labor_rate,
+       ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)),1) AS total_billed_hours,
+       ROUND(SUM(try_cast(total_labor_sale AS DOUBLE)),2) AS total_labor_revenue
+FROM dms_service
+WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+
+-- TOP ADVISOR BY REVENUE
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT service_advisor_name,
+       COUNT(DISTINCT ro_number) AS ro_count,
+       ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue
+FROM dms_service
+WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+GROUP BY service_advisor_name ORDER BY revenue DESC LIMIT 10
+
+-- OPEN ROs OVER 3 DAYS OLD (stalled)
+WITH anchor AS (SELECT MAX(open_date) AS latest FROM dms_service)
+SELECT DISTINCT ro_number, customer_name, vin, make, model, year, service_advisor_name,
+       open_date, DATEDIFF('day', open_date, (SELECT latest FROM anchor)) AS days_open
+FROM dms_service
+WHERE ro_status NOT ILIKE '%clos%' AND open_date IS NOT NULL
+  AND DATEDIFF('day', open_date, (SELECT latest FROM anchor)) > 3
+ORDER BY days_open DESC
+
+-- OPEN ROs CURRENTLY IN PROGRESS (count + list)
+SELECT DISTINCT ro_number, customer_name, vin, make, model, year, open_date,
+       service_advisor_name, tech_name, ro_department
+FROM dms_service WHERE ro_status NOT ILIKE '%clos%'
+ORDER BY open_date
+
+-- TECHNICIAN WITH MOST OPEN JOBS
+SELECT tech_name, COUNT(DISTINCT ro_number) AS open_jobs
+FROM dms_service WHERE ro_status NOT ILIKE '%clos%' AND tech_name IS NOT NULL AND tech_name != ''
+GROUP BY tech_name ORDER BY open_jobs DESC LIMIT 10
+
+-- AVERAGE CYCLE TIME (open to close in days)
+WITH anchor AS (SELECT DATE_TRUNC('week', MAX(close_date)) AS wk FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT ROUND(AVG(DATEDIFF('day', open_date, close_date)),1) AS avg_cycle_days,
+       COUNT(DISTINCT ro_number) AS ro_count
+FROM dms_service
+WHERE close_date >= (SELECT wk FROM anchor) AND ro_status ILIKE '%clos%'
+  AND open_date IS NOT NULL AND close_date IS NOT NULL
+
+-- APPOINTMENT SHOW RATE
+WITH anchor AS (SELECT DATE_TRUNC('week', MAX(appointment_date)) AS wk FROM dms_appointments)
+SELECT
+  COUNT(DISTINCT a.appointment_number) AS total_appointments,
+  COUNT(DISTINCT CASE WHEN a.ro_number IS NOT NULL AND a.ro_number != '' THEN a.appointment_number END) AS showed_up,
+  COUNT(DISTINCT CASE WHEN a.ro_number IS NULL OR a.ro_number = '' THEN a.appointment_number END) AS no_shows,
+  ROUND(100.0 * COUNT(DISTINCT CASE WHEN a.ro_number IS NOT NULL AND a.ro_number != '' THEN a.appointment_number END)
+        / NULLIF(COUNT(DISTINCT a.appointment_number),0), 1) AS show_rate_pct
+FROM dms_appointments a
+WHERE a.appointment_date >= (SELECT wk FROM anchor)
+
+-- NO-SHOWS PER ADVISOR
+WITH anchor AS (SELECT DATE_TRUNC('week', MAX(appointment_date)) AS wk FROM dms_appointments)
+SELECT service_advisor_name,
+       COUNT(DISTINCT appointment_number) AS total_booked,
+       COUNT(DISTINCT CASE WHEN ro_number IS NULL OR ro_number = '' THEN appointment_number END) AS no_shows
+FROM dms_appointments
+WHERE appointment_date >= (SELECT wk FROM anchor)
+GROUP BY service_advisor_name ORDER BY no_shows DESC
+
+-- APPOINTMENTS SCHEDULED FOR TOMORROW / NEXT DAY
+WITH anchor AS (SELECT MAX(appointment_date) AS latest FROM dms_appointments)
+SELECT appointment_date, service_advisor_name, customer_name, vin, make, model,
+       operation_code_description, appointment_time, loaner_flag, waiting_flag
+FROM dms_appointments
+WHERE appointment_date = (SELECT latest + INTERVAL 1 DAY FROM anchor)
+ORDER BY appointment_time
+
+-- BREAK DOWN APPOINTMENTS BY ADVISOR (busiest day)
+WITH anchor AS (SELECT MAX(appointment_date) AS latest FROM dms_appointments)
+SELECT service_advisor_name, COUNT(DISTINCT appointment_number) AS appointments
+FROM dms_appointments WHERE appointment_date = (SELECT latest FROM anchor)
+GROUP BY service_advisor_name ORDER BY appointments DESC
+
+-- BUSIEST DAY OF THE WEEK
+SELECT DAYNAME(appointment_date) AS day_of_week,
+       COUNT(DISTINCT appointment_number) AS total_appointments
+FROM dms_appointments GROUP BY 1 ORDER BY 2 DESC
+
+-- OIL CHANGES BOOKED THIS WEEK
+WITH anchor AS (SELECT DATE_TRUNC('week', MAX(appointment_date)) AS wk FROM dms_appointments)
+SELECT COUNT(DISTINCT appointment_number) AS oil_change_appointments
+FROM dms_appointments
+WHERE appointment_date >= (SELECT wk FROM anchor)
+  AND operation_code_description ILIKE '%oil%'
+
+-- HOW FAR OUT ARE WE BOOKED (max future appointment date)
+SELECT MAX(appointment_date) AS furthest_booked_date,
+       DATEDIFF('day', MIN(appointment_date), MAX(appointment_date)) AS booking_window_days
+FROM dms_appointments WHERE appointment_date IS NOT NULL
+
+-- CUSTOMERS WHO CANCELLED TWICE IN 60 DAYS (appointments with no RO, repeated)
+WITH anchor AS (SELECT MAX(appointment_date) AS latest FROM dms_appointments),
+no_shows AS (
+  SELECT customer_number, customer_name, COUNT(DISTINCT appointment_number) AS no_show_count
+  FROM dms_appointments
+  WHERE (ro_number IS NULL OR ro_number = '')
+    AND appointment_date >= (SELECT latest - INTERVAL 60 DAY FROM anchor)
+  GROUP BY customer_number, customer_name HAVING COUNT(DISTINCT appointment_number) >= 2
+)
+SELECT * FROM no_shows ORDER BY no_show_count DESC
+
+-- INVENTORY HEALTH: HOW MANY UNITS IN STOCK
+SELECT vehicle_status, COUNT(*) AS unit_count
+FROM dms_inventory GROUP BY vehicle_status ORDER BY unit_count DESC
+
+-- AVERAGE DAYS IN INVENTORY (for units currently in stock)
+WITH anchor AS (SELECT MAX(file_date) AS today FROM dms_inventory)
+SELECT ROUND(AVG(DATEDIFF('day', inventory_date, (SELECT today FROM anchor))),1) AS avg_days_in_inventory,
+       COUNT(*) AS unit_count
+FROM dms_inventory WHERE vehicle_status ILIKE '%stock%' AND inventory_date IS NOT NULL
+
+-- AGED INVENTORY OVER 60 DAYS
+WITH anchor AS (SELECT MAX(file_date) AS today FROM dms_inventory)
+SELECT stock_number, vin, year, make, model, trim, exterior_color, odometer,
+       list_price, inventory_date,
+       DATEDIFF('day', inventory_date, (SELECT today FROM anchor)) AS days_in_inventory
+FROM dms_inventory
+WHERE vehicle_status ILIKE '%stock%' AND inventory_date IS NOT NULL
+  AND DATEDIFF('day', inventory_date, (SELECT today FROM anchor)) > 60
+ORDER BY days_in_inventory DESC
+
+-- TOTAL INVENTORY VALUE
+SELECT COUNT(*) AS units,
+       ROUND(SUM(try_cast(list_price AS DOUBLE)),2) AS total_list_value,
+       ROUND(SUM(try_cast(cost AS DOUBLE)),2) AS total_cost_value
+FROM dms_inventory WHERE vehicle_status ILIKE '%stock%'
+
+-- CERTIFIED VS NON-CERTIFIED
+SELECT CASE WHEN certification ILIKE '%certif%' THEN 'Certified' ELSE 'Non-Certified' END AS type,
+       COUNT(*) AS units
+FROM dms_inventory WHERE vehicle_status ILIKE '%stock%' GROUP BY 1
+
+-- INVENTORY UNITS UNDER $15,000 WITH UNDER 50K MILES
+SELECT stock_number, vin, year, make, model, odometer, list_price, internet_price
+FROM dms_inventory
+WHERE vehicle_status ILIKE '%stock%'
+  AND try_cast(list_price AS DOUBLE) < 15000
+  AND odometer < 50000
+ORDER BY list_price
+
+-- FASTEST TURNING MODELS (sold quickest relative to time in inventory)
+SELECT i.make, i.model,
+       ROUND(AVG(DATEDIFF('day', i.inventory_date, s.booked_date)),1) AS avg_days_to_sell,
+       COUNT(*) AS units_sold
+FROM dms_inventory i JOIN dms_sales s ON i.vin = s.vin
+WHERE i.inventory_date IS NOT NULL AND s.booked_date IS NOT NULL
+GROUP BY i.make, i.model HAVING COUNT(*) >= 3 ORDER BY avg_days_to_sell
+
+-- CUSTOMER-PAY VS WARRANTY MIX
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT
+  ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS customer_pay_revenue,
+  ROUND(SUM(try_cast(warranty_total_sale AS DOUBLE)),2) AS warranty_revenue,
+  ROUND(SUM(try_cast(internal_total_sale AS DOUBLE)),2) AS internal_revenue,
+  ROUND(100.0 * SUM(try_cast(customer_total_sale AS DOUBLE))
+        / NULLIF(SUM(try_cast(total_sale AS DOUBLE)),0), 1) AS customer_pay_pct
+FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+
+-- DECLINED SERVICES (recommendations not taken)
+SELECT DISTINCT ro_number, customer_name, vin, make, model, service_advisor_name,
+       recommendations, open_date
+FROM dms_service
+WHERE recommendations IS NOT NULL AND TRIM(recommendations) != ''
+ORDER BY open_date DESC LIMIT 50
+
+-- CUSTOMERS WHO DECLINED SERVICE AND HAVE OPEN RECALLS
+SELECT DISTINCT s.customer_name, s.vin, s.make, s.model, s.year,
+       s.recommendations AS declined_service, s.open_date
+FROM dms_service s
+WHERE s.recommendations IS NOT NULL AND TRIM(s.recommendations) != ''
+  AND s.operation_code_descriptions ILIKE '%recall%'
+ORDER BY s.open_date DESC
+
+-- HIGH-VALUE CUSTOMERS WHO HAVEN'T RETURNED IN 6 MONTHS
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+customer_stats AS (
+  SELECT customer_number, customer_name,
+         MAX(close_date) AS last_visit,
+         COUNT(DISTINCT ro_number) AS total_visits,
+         ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS lifetime_spend
+  FROM dms_service WHERE ro_status ILIKE '%clos%' GROUP BY customer_number, customer_name
+)
+SELECT customer_name, last_visit, total_visits, lifetime_spend,
+       DATEDIFF('day', last_visit, (SELECT latest FROM anchor)) AS days_since_last_visit
+FROM customer_stats
+WHERE lifetime_spend > 500
+  AND DATEDIFF('day', last_visit, (SELECT latest FROM anchor)) > 180
+ORDER BY lifetime_spend DESC LIMIT 50
+
+-- CUSTOMERS WHO SERVICED 3+ TIMES BUT NEVER BOUGHT (loyalty without purchase)
+WITH service_counts AS (
+  SELECT customer_number, customer_name, COUNT(DISTINCT ro_number) AS service_visits
+  FROM dms_service GROUP BY customer_number, customer_name HAVING COUNT(DISTINCT ro_number) >= 3
+),
+buyers AS (SELECT DISTINCT customer_number FROM dms_sales)
+SELECT sc.customer_name, sc.service_visits
+FROM service_counts sc
+LEFT JOIN buyers b ON sc.customer_number = b.customer_number
+WHERE b.customer_number IS NULL
+ORDER BY sc.service_visits DESC LIMIT 50
+
+-- VEHICLES SERVICED HERE BUT PURCHASED ELSEWHERE (VIN in service but not in sales)
+SELECT DISTINCT s.customer_name, s.vin, s.make, s.model, s.year,
+       COUNT(DISTINCT s.ro_number) AS service_count,
+       MAX(s.close_date) AS last_service
+FROM dms_service s
+LEFT JOIN dms_sales sa ON s.vin = sa.vin
+WHERE sa.vin IS NULL AND s.ro_status ILIKE '%clos%'
+GROUP BY s.customer_name, s.vin, s.make, s.model, s.year ORDER BY service_count DESC LIMIT 50
+
+-- INVENTORY VEHICLES WITH OPEN ROs IN THE SHOP
+SELECT i.stock_number, i.vin, i.year, i.make, i.model, i.exterior_color,
+       i.odometer, i.list_price, i.open_ro_number
+FROM dms_inventory i
+WHERE i.open_ro_number IS NOT NULL AND TRIM(i.open_ro_number) != ''
+
+-- VEHICLES WITH MULTIPLE ROs IN 30 DAYS
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT vin, customer_name, make, model, COUNT(DISTINCT ro_number) AS ro_count,
+       MIN(open_date) AS first_ro, MAX(close_date) AS last_ro
+FROM dms_service
+WHERE close_date >= (SELECT latest - INTERVAL 30 DAY FROM anchor) AND ro_status ILIKE '%clos%'
+GROUP BY vin, customer_name, make, model HAVING COUNT(DISTINCT ro_number) > 1
+ORDER BY ro_count DESC
+
+-- CUSTOMERS WITH OPEN ROs AND FUTURE APPOINTMENTS
+SELECT DISTINCT s.customer_name, s.vin, s.make, s.model, s.ro_number, s.open_date AS ro_open_date,
+       a.appointment_date, a.service_advisor_name
+FROM dms_service s
+JOIN dms_appointments a ON s.vin = a.vin
+WHERE s.ro_status NOT ILIKE '%clos%'
+  AND a.appointment_date > (SELECT MAX(close_date) FROM dms_service WHERE ro_status ILIKE '%clos%')
+
+-- APPOINTMENTS WITH NO RO OPENED (no-shows / walk-aways)
+SELECT a.appointment_number, a.customer_name, a.vin, a.make, a.model,
+       a.appointment_date, a.service_advisor_name, a.operation_code_description
+FROM dms_appointments a
+WHERE (a.ro_number IS NULL OR a.ro_number = '')
+ORDER BY a.appointment_date DESC LIMIT 50
+
+-- RETENTION RATE: CUSTOMERS RETURNED WITHIN 6 MONTHS
+WITH first_visits AS (
+  SELECT customer_number, MIN(close_date) AS first_visit FROM dms_service
+  WHERE ro_status ILIKE '%clos%' GROUP BY customer_number
+),
+return_visits AS (
+  SELECT s.customer_number FROM dms_service s
+  JOIN first_visits f ON s.customer_number = f.customer_number
+  WHERE s.close_date > f.first_visit
+    AND s.close_date <= f.first_visit + INTERVAL 180 DAY
+    AND s.ro_status ILIKE '%clos%'
+  GROUP BY s.customer_number
+)
+SELECT COUNT(DISTINCT f.customer_number) AS total_customers,
+       COUNT(DISTINCT r.customer_number) AS returned_within_6mo,
+       ROUND(100.0 * COUNT(DISTINCT r.customer_number) / NULLIF(COUNT(DISTINCT f.customer_number),0),1) AS retention_rate_pct
+FROM first_visits f LEFT JOIN return_visits r ON f.customer_number = r.customer_number
+
+-- TECHNICIAN PRODUCTIVITY (billed hours vs tech hours)
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT tech_name,
+       COUNT(DISTINCT ro_number) AS ro_count,
+       ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)),1) AS billed_hours,
+       ROUND(SUM(try_cast(labor_tech_hours AS DOUBLE)),1) AS tech_hours,
+       ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)) / NULLIF(SUM(try_cast(labor_tech_hours AS DOUBLE)),0),2) AS efficiency_ratio
+FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+  AND tech_name IS NOT NULL AND tech_name != ''
+GROUP BY tech_name ORDER BY billed_hours DESC
+
+-- MOST COMMONLY UPSOLD SERVICES
+SELECT operation_code_descriptions,
+       COUNT(DISTINCT ro_number) AS upsell_count
+FROM dms_service
+WHERE upsell ILIKE '%y%' AND operation_code_descriptions IS NOT NULL
+GROUP BY operation_code_descriptions ORDER BY upsell_count DESC LIMIT 20
+
+-- SALES PERFORMANCE: TOP SALESPERSON
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(booked_date)) AS m FROM dms_sales)
+SELECT salesman_1_name AS salesperson,
+       COUNT(DISTINCT deal_number) AS deals,
+       ROUND(SUM(try_cast(gross_profit AS DOUBLE)),2) AS total_gross,
+       ROUND(AVG(try_cast(gross_profit AS DOUBLE)),2) AS avg_gross_per_deal
+FROM dms_sales WHERE booked_date >= (SELECT m FROM anchor)
+GROUP BY salesman_1_name ORDER BY total_gross DESC LIMIT 10
+
+-- NEW VS USED BREAKDOWN
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(booked_date)) AS m FROM dms_sales)
+SELECT new_or_used, COUNT(DISTINCT deal_number) AS deals,
+       ROUND(SUM(try_cast(total_profit AS DOUBLE)),2) AS total_profit
+FROM dms_sales WHERE booked_date >= (SELECT m FROM anchor)
+GROUP BY new_or_used
+
+-- PACE: ARE WE AHEAD OR BEHIND LAST MONTH?
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+this_month AS (
+  SELECT COUNT(DISTINCT ro_number) AS ros,
+         ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue,
+         DAY((SELECT latest FROM anchor)) AS days_elapsed
+  FROM dms_service
+  WHERE close_date >= DATE_TRUNC('month', (SELECT latest FROM anchor))
+    AND ro_status ILIKE '%clos%'
+),
+last_month AS (
+  SELECT COUNT(DISTINCT ro_number) AS ros,
+         ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue
+  FROM dms_service
+  WHERE close_date >= DATE_TRUNC('month', (SELECT latest FROM anchor)) - INTERVAL 1 MONTH
+    AND close_date < DATE_TRUNC('month', (SELECT latest FROM anchor))
+    AND ro_status ILIKE '%clos%'
+)
+SELECT
+  t.ros AS this_month_ros, l.ros AS last_month_ros,
+  t.revenue AS this_month_revenue, l.revenue AS last_month_revenue,
+  ROUND(100.0 * (t.revenue - l.revenue) / NULLIF(l.revenue,0), 1) AS revenue_change_pct,
+  t.days_elapsed AS days_into_month
+FROM this_month t, last_month l
 """.strip()
         dms_notes_block = """
-IMPORTANT search rules:
-- ALWAYS use ILIKE (not = or LIKE) when matching text columns like dealer_name, make, model, customer_name, operation_code_descriptions, etc. This ensures case-insensitive matching.
-  Example: dealer_name ILIKE '%stephen wade nissan%' (NOT dealer_name = 'Stephen Wade Nissan')
-  Example: make ILIKE '%nissan%'
-- To find service types (oil change, tire, brake, etc.), use ILIKE on these columns:
-  - dms_service.operation_code_descriptions ILIKE '%oil%' (main field for service ROs)
-  - dms_service.part_description ILIKE '%oil%' (for parts used)
-  - dms_appointments.operation_code_description ILIKE '%oil%' (for booked appointments)
-  - dms_events.service_description ILIKE '%oil%' (unified view)
-- Use '%keyword%' pattern: e.g. ILIKE '%oil%' matches 'LUBE, OIL & FILTER SERVICE'.
-- Do NOT search columns named 'description' or 'complaint' in dms_service or dms_appointments; those are empty. Only use operation_code_descriptions, operation_code_description, part_description, or service_description.
-- For date filtering, use the DATE columns (close_date, open_date, appointment_date, booked_date, etc.), not the *_raw string columns.
-- Money columns (customer_total_sale, total_sale, list_price, gross_profit, etc.) may be strings. To sum/average, use: try_cast(column_name AS DOUBLE).
-- customer_number is the DMS customer identifier (present in appointments, service, and sales; NOT in inventory).
-- In dms_inventory, sold_date is mostly empty (most rows have no sold_date). Do NOT rely on sold_date IS NULL to mean "unsold". Instead, use vehicle_status or simply count all inventory rows for that dealer.
-- Known dealer name in the data: 'Stephen Wade Nissan'. Always match with ILIKE.
+━━━━━━━━━━━━━━━━━ SEARCH & QUERY RULES ━━━━━━━━━━━━━━━━━
 
-CROSS-TABLE JOINS (very important — use these patterns when questions involve multiple datasets):
+- ALWAYS use ILIKE for all text matching: dealer_name, make, model, customer_name, service fields, statuses
+- Money columns (customer_total_sale, total_sale, list_price, gross_profit, front_gross, etc.) are VARCHAR — always wrap in try_cast(x AS DOUBLE) before SUM/AVG/comparison
+- Hours columns (labor_bill_hours, labor_tech_hours) are VARCHAR — always try_cast to DOUBLE
+- Date columns are DATE type — use them directly for comparisons; do not use the *_raw columns
+- NEVER use CURRENT_DATE — always anchor to MAX(date) in the relevant table
+- ro_status for closed ROs: use ro_status ILIKE '%clos%' (not exact equality)
+- ro_status for open ROs: use ro_status NOT ILIKE '%clos%'
+- operation_code_descriptions is pipe-delimited (e.g. 'ELOF|MPI') — use ILIKE '%keyword%'
+- In dms_inventory: do NOT rely on sold_date IS NULL to mean in-stock; use vehicle_status ILIKE '%stock%'
+- customer_number is the join key for appointments, service, and sales (NOT in inventory)
+- Primary cross-table join key: VIN
+- To detect no-shows: appointment has ro_number IS NULL or ro_number = '' in dms_appointments
+- To detect appointment-based ROs: dms_service.appointment_flag ILIKE '%y%'
+- Known dealer: 'Stephen Wade Nissan' — always match with ILIKE
+- dms_inventory has a file_date (DATE) column representing the snapshot date — use as proxy for "today" when computing days in inventory
 
-1. APPOINTMENT SHOW-UP / NO-SHOW RATE:
-   To determine if a customer SHOWED UP after booking an appointment, LEFT JOIN dms_appointments to dms_service by VIN + matching dates.
-   JOIN: dms_appointments.vin = dms_service.vin AND dms_appointments.appointment_date = dms_service.open_date
-   A matching service record means the customer showed up. No match = no-show.
-   Example:
-     SELECT
-       COUNT(DISTINCT a.appointment_number) AS total_appointments,
-       COUNT(DISTINCT CASE WHEN s.ro_number IS NOT NULL THEN a.appointment_number END) AS showed_up,
-       COUNT(DISTINCT CASE WHEN s.ro_number IS NULL THEN a.appointment_number END) AS no_shows
-     FROM dms_appointments a
-     LEFT JOIN dms_service s ON a.vin = s.vin AND a.appointment_date = s.open_date
+━━━━━━━━━━━━━━━━━ SYNONYMS ━━━━━━━━━━━━━━━━━
 
-2. CUSTOMERS WHO BOUGHT A CAR AND LATER CAME FOR SERVICE (post-sale retention):
-   JOIN: dms_sales.vin = dms_service.vin AND dms_service.open_date > dms_sales.booked_date
-   Use this for questions like "did buyers come back for service?", "post-sale service rate".
+VAGUE DEALER QUESTIONS → interpret as follows:
+  "How are we looking today?" → service revenue + RO count for MAX close_date day in dms_service
+  "Anything stuck in the shop?" → open ROs older than 3 days (ro_status NOT ILIKE '%clos%', days_open > 3)
+  "What's hurting us right now?" → open ROs > 3 days old + recent low show-rate advisors
+  "Are we busy tomorrow?" → appointment count for MAX(appointment_date)+1 day
+  "Who's killing it this month?" → top advisor by revenue this month (dms_service)
+  "Why are we slow this week?" → RO count this week vs last week comparison
+  "What's aging in inventory?" → units in dms_inventory with days in inventory > 60
+  "Do we have any problem customers?" → customers with 2+ no-shows OR unpaid ROs
+  "How are we doing?" → summary: RO count + revenue for current month vs last month
 
-3. REPEAT SERVICE CUSTOMERS (customer loyalty):
-   Group dms_service by customer_number (or vin) and COUNT(DISTINCT ro_number) to find repeat visitors.
-   HAVING COUNT(DISTINCT ro_number) > 1 = repeat customer.
-   Use for "how many repeat customers", "customer visit frequency", "loyal customers".
+Service synonyms → dms_service.operation_code_descriptions ILIKE '%keyword%':
+  oil change / lube / giffy lube / jiffy lube / oil and filter → ILIKE '%oil%' OR '%lube%'
+  tires / tire rotation / flat tire → ILIKE '%tire%'
+  brakes / brake job / brake pads → ILIKE '%brake%'
+  inspection / mpi / multi-point / check-up → ILIKE '%inspect%' OR '%mpi%'
+  recall / safety fix / recall repair → ILIKE '%recall%'
+  transmission / trans service → ILIKE '%trans%'
+  A/C / air conditioning / cooling → ILIKE '%cool%' OR '%A/C%' OR '%air cond%'
+  alignment → ILIKE '%align%'
+  battery → ILIKE '%battery%' OR '%batter%'
+  repair shop / car shop / mechanic → generic dms_service (no operation filter)
 
-4. TIME BETWEEN SERVICE VISITS:
-   Use LAG(open_date) OVER (PARTITION BY vin ORDER BY open_date) to get previous visit date per VIN.
-   DATEDIFF('day', previous_date, open_date) gives days between visits.
-   Use for "average time between visits", "how often do customers come back".
+Appointment synonyms → dms_appointments:
+  booking / scheduled / coming in / booked → appointment
 
-5. INVENTORY TO SALES (which inventory sold):
-   JOIN: dms_inventory.vin = dms_sales.vin
-   Use for "which inventory items sold", "days on lot before sale", "sell-through rate".
-   Days on lot = DATEDIFF('day', dms_inventory.inventory_date, dms_sales.booked_date).
+Sales synonyms → dms_sales:
+  bought / purchased / deal / transaction / sold / unit sold → vehicle sale
+  gross / front end / back end / F&I / finance profit → front_gross, back_gross, finance_profit
+  floor / flooring / floor plan → dms_inventory
 
-6. FULL VEHICLE TIMELINE:
-   Use the dms_events view (already unified) to see ALL activity for a VIN across appointments, service, inventory, and sales in chronological order.
-   Filter by vin and ORDER BY event_date.
+Inventory synonyms → dms_inventory:
+  on the lot / in stock / available cars / units on hand → vehicle_status ILIKE '%stock%'
+  days on lot / aged / stale / sitting → DATEDIFF from inventory_date
+  certified / CPO / certified pre-owned → certification ILIKE '%certif%'
+  new → new_or_used ILIKE '%new%' (in dms_sales) or vehicle_type ILIKE '%new%' (in dms_inventory)
+  used → new_or_used ILIKE '%use%'
 
-7. SERVICE ADVISOR PERFORMANCE:
-   Group dms_service by service_advisor_name to get RO counts, revenue per advisor.
-   Join with dms_appointments to get show rates per advisor.
+Customer synonyms:
+  buyer / owner / client / guest / contact / driver → customer_name or customer_number
 
-The primary join key across all DMS tables is VIN. customer_number is shared between appointments, service, and sales (NOT inventory).
+People synonyms:
+  advisor / SA / service writer / writer → service_advisor_name
+  tech / technician / mechanic → tech_name
+  salesperson / sales rep / salesman → salesman_1_name
+  F&I / finance manager / finance person → finance_manager_name
+  GM / general manager / dealer principal → no column; answer with aggregate summary
 
-SYNONYMS — understand these layman/alternate terms and map them to the correct columns/tables:
-
-Service & Repair synonyms → use dms_service, filter on operation_code_descriptions ILIKE '%keyword%':
-  "oil change", "lube", "lube job", "giffy lube", "jiffy lube", "oil and filter" → oil change service
-  "tire rotation", "tires", "flat tire", "tire repair" → tire-related service
-  "brake job", "brakes", "brake pads", "stopping power" → brake service
-  "car shop", "repair shop", "fix shop", "mechanic", "body shop", "service center" → service visit
-  "multi-point", "mpi", "inspection", "check-up", "checkup", "look over" → inspection
-  "recall fix", "recall repair", "safety fix" → recall-related service
-
-Appointment synonyms → use dms_appointments:
-  "booking", "scheduled visit", "set up an appointment", "booked in", "coming in" → appointment
-
-Sales synonyms → use dms_sales:
-  "purchased", "bought", "deal", "transaction", "sold a car", "unit sold" → vehicle sale
-  "gross", "front end", "back end", "F&I", "finance" → profit-related columns
-
-Inventory synonyms → use dms_inventory:
-  "on the lot", "in stock", "available cars", "floor plan", "units on hand" → inventory
-  "days on lot", "aged unit", "stale inventory" → days since inventory_date
-
-Customer synonyms → map to customer_name or customer_number:
-  "buyer", "owner", "driver", "client", "guest", "contact" → customer
-
-Time synonyms — ALWAYS anchor to latest date in data, not CURRENT_DATE:
-  "yesterday", "last night", "today", "this morning" → most recent day in the relevant table
-  "this week", "current week" → week containing MAX(date) in the table
-  "last week", "previous week" → week before MAX(date)
-  "this month", "current month" → month of MAX(date)
-  "last month", "previous month" → month before MAX(date)
-  "recent", "latest", "newest", "most recent" → ORDER BY date DESC LIMIT N
+Time synonyms — ALWAYS anchor to MAX(date_col) in the table, NEVER use CURRENT_DATE:
+  today / yesterday / this morning → MAX day in relevant date column
+  this week / current week → week containing MAX date
+  last week / previous week → week before MAX date
+  this month / current month → month of MAX date
+  last month / previous month → month before MAX date
+  year to date / YTD → from Jan 1 of MAX year to MAX date
+  recent / latest / newest → ORDER BY date DESC LIMIT N
+  trend → group by month (DATE_TRUNC('month', date_col)) and ORDER BY month
+  "over the last 6 months" → MAX date - INTERVAL 6 MONTH to MAX date
 """.strip()
         if RETENTION_DATA_AVAILABLE:
             dms_tables_block += "\n6) customer_retention (synthetic retention dataset)"
