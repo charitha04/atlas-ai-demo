@@ -2067,11 +2067,38 @@ def answer_question(
 # ---------------------------------------------------------------
 # Chart config generation
 # ---------------------------------------------------------------
-_ID_KEYWORDS = {"id", "uuid", "vin", "imei", "number", "zip", "phone", "code", "ro_number"}
+
+# Columns that indicate a row-level list result (not an aggregation) — skip chart
+_LIST_INDICATOR_COLS = {
+    "vin", "stock_number", "ro_number", "appointment_number", "deal_number",
+    "customer_number", "customer_name", "imei", "part_number", "tech_number",
+    "service_advisor_number", "salesman_1_number",
+}
+
+# Numeric columns that are identifiers or measurements — not meaningful chart axes
+_ID_KEYWORDS = {"id", "uuid", "imei", "zip", "phone", "mileage", "odometer",
+                "ro_mileage", "mileage_out", "appointment_mileage", "delivery_mileage"}
+
+# Column name suffixes that are good aggregation y-axes
+_GOOD_Y_SUFFIXES = (
+    "count", "total", "revenue", "sale", "profit", "gross", "rate", "pct",
+    "hours", "days", "visits", "ros", "deals", "units", "appointments",
+    "avg", "sum", "min", "max", "amount", "value", "score", "efficiency",
+)
 
 
 def _is_meaningful_numeric(col: str) -> bool:
-    return not any(k in col.lower() for k in _ID_KEYWORDS)
+    col_l = col.lower()
+    if any(k in col_l for k in _ID_KEYWORDS):
+        return False
+    # Prefer columns that look like aggregations
+    return True
+
+
+def _is_good_y_col(col: str) -> bool:
+    """True if the column name looks like an aggregated metric (count, revenue, etc.)."""
+    col_l = col.lower()
+    return any(col_l.endswith(s) or s in col_l for s in _GOOD_Y_SUFFIXES)
 
 
 def _is_date_like(series: pd.Series) -> bool:
@@ -2081,29 +2108,52 @@ def _is_date_like(series: pd.Series) -> bool:
     return sum(bool(re.search(r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}", v)) for v in sample) >= 3
 
 
+def _is_list_result(df: pd.DataFrame) -> bool:
+    """Return True if the DataFrame looks like a row-level list (not an aggregation)."""
+    cols_lower = {c.lower() for c in df.columns}
+    # If it contains any list-indicator column it's a detail list, not a summary
+    if cols_lower & _LIST_INDICATOR_COLS:
+        return True
+    # If it has many columns (>7) it's almost certainly a list
+    if len(df.columns) > 7:
+        return True
+    return False
+
+
 def build_chart_config(df: pd.DataFrame, question: str) -> dict | None:
     """
     Analyse the result DataFrame and return a chart config dict, or None if no chart is appropriate.
     Config shape: { type, x_col, y_col, title }
+
+    Only generates charts for aggregated results (counts, sums, averages grouped by a dimension).
+    Never generates charts for row-level lists (inventory, RO lists, customer lists, etc.).
     """
     if df is None or df.empty or len(df) < 3:
         return None
-    # Single-value result — no chart
     if df.shape == (1, 1):
+        return None
+
+    # Skip chart for detail/list results — they have no useful chart
+    if _is_list_result(df):
         return None
 
     numeric_cols = [c for c in df.select_dtypes(include="number").columns if _is_meaningful_numeric(c)]
     if not numeric_cols:
         return None
 
-    y_col = numeric_cols[0]
+    # Prefer columns that look like aggregated metrics; fall back to first numeric
+    good_y_cols = [c for c in numeric_cols if _is_good_y_col(c)]
+    y_col = good_y_cols[0] if good_y_cols else numeric_cols[0]
+
     text_cols = [c for c in df.columns if c not in df.select_dtypes(include="number").columns]
+    # Exclude date-like columns from text_cols
     date_cols = [c for c in df.columns if _is_date_like(df[c])]
+    text_cols = [c for c in text_cols if c not in date_cols]
 
     title = question.strip().capitalize()
 
-    # Line chart: date x-axis
-    if date_cols:
+    # Line chart: only when there's a date x-axis AND a meaningful numeric y
+    if date_cols and good_y_cols:
         return {"type": "line", "x_col": date_cols[0], "y_col": y_col, "title": title}
 
     if not text_cols:
@@ -2112,15 +2162,15 @@ def build_chart_config(df: pd.DataFrame, question: str) -> dict | None:
     x_col = text_cols[0]
     unique_vals = df[x_col].nunique()
 
-    # Pie chart: categorical with ≤8 distinct values and 1 numeric column
+    # Pie: ≤8 categories and exactly 1 meaningful numeric
     if unique_vals <= 8 and len(numeric_cols) == 1:
         return {"type": "pie", "x_col": x_col, "y_col": y_col, "title": title}
 
-    # Horizontal bar: many categories
+    # Horizontal bar: many categories (top rankings, advisors, models, etc.)
     if unique_vals > 10:
         return {"type": "bar_horizontal", "x_col": x_col, "y_col": y_col, "title": title}
 
-    # Vertical bar: default
+    # Vertical bar: small number of categories with meaningful numeric
     return {"type": "bar", "x_col": x_col, "y_col": y_col, "title": title}
 
 
