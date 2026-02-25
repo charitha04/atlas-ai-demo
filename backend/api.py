@@ -1582,6 +1582,31 @@ def _build_no_results_message(question: str) -> str:
 # ---------------------------------------------------------------
 # Out-of-scope detection
 # ---------------------------------------------------------------
+_GREETING_PATTERNS = [
+    r"^\s*(hi|hey|hello|howdy|hiya|yo)\s*[!.,]?\s*$",
+    r"^\s*how are you\b",
+    r"^\s*good\s*(morning|afternoon|evening|day)\s*[!.,]?\s*$",
+    r"^\s*what'?s\s+up\s*[!.,]?\s*$",
+    r"^\s*greetings?\s*[!.,]?\s*$",
+    r"^\s*sup\s*[!.,]?\s*$",
+]
+
+_GREETING_RESPONSES = [
+    "Hey! I'm Atlas AI, your dealership data assistant. Ask me anything about service, appointments, inventory, or sales and I'll pull the numbers for you.",
+    "Hello! Ready to dig into your dealership data. Ask me about service revenue, inventory, appointments, or sales — I've got the numbers.",
+    "Hi there! I'm Atlas AI. What would you like to know about your service, inventory, or sales data today?",
+]
+
+def _is_greeting(question: str) -> bool:
+    q = (question or "").strip().lower()
+    return any(re.search(p, q, re.IGNORECASE) for p in _GREETING_PATTERNS)
+
+
+def _build_greeting_response() -> str:
+    import random
+    return random.choice(_GREETING_RESPONSES)
+
+
 _OUT_OF_SCOPE_PATTERNS = [
     r"\b(weather|temperature|forecast|news|sports|stock\s+market|crypto|bitcoin)\b",
     r"\b(recipe|cook|food|restaurant|hotel|flight|travel|vacation)\b",
@@ -2054,6 +2079,9 @@ def answer_question(
     rows is a list of dicts (up to 200 rows) when a SQL query was executed,
     empty list otherwise (strategy mode, metadata, or error).
     """
+    if _is_greeting(question):
+        return _build_greeting_response(), "-- Greeting", False, []
+
     if _is_out_of_scope(question):
         return _build_out_of_scope_message(), "-- Out of scope", False, []
 
