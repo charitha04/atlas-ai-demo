@@ -785,7 +785,7 @@ dms_appointments (booked appointments — one row per appointment):
   Advisor:      service_advisor_name
   Service:      operation_code_description (what was booked)
   Flags:        loaner_flag ('Y'/'N'), waiting_flag ('Y'/'N')
-  RO link:      ro_number (NULL if no RO was opened → means no-show)
+  RO link:      ro_number (ALWAYS EMPTY in this dataset — do NOT use to detect show-ups; use VIN+date join to dms_service instead)
   Estimate:     estimate_amount (VARCHAR)
   Sale type:    sale_type
   Vehicle:      make, model, year, exterior_color, appointment_mileage
@@ -895,24 +895,31 @@ WHERE close_date >= (SELECT wk FROM anchor) AND ro_status ILIKE '%clos%'
   AND open_date IS NOT NULL AND close_date IS NOT NULL
 
 -- APPOINTMENT SHOW RATE
+-- NOTE: ro_number in dms_appointments is always empty. Detect show-ups by joining to dms_service on VIN + date window.
 WITH anchor AS (SELECT DATE_TRUNC('week', MAX(appointment_date)) AS wk FROM dms_appointments)
 SELECT
   COUNT(DISTINCT a.appointment_number) AS total_appointments,
-  COUNT(DISTINCT CASE WHEN a.ro_number IS NOT NULL AND a.ro_number != '' THEN a.appointment_number END) AS showed_up,
-  COUNT(DISTINCT CASE WHEN a.ro_number IS NULL OR a.ro_number = '' THEN a.appointment_number END) AS no_shows,
-  ROUND(100.0 * COUNT(DISTINCT CASE WHEN a.ro_number IS NOT NULL AND a.ro_number != '' THEN a.appointment_number END)
-        / NULLIF(COUNT(DISTINCT a.appointment_number),0), 1) AS show_rate_pct
+  COUNT(DISTINCT CASE WHEN s.ro_number IS NOT NULL THEN a.appointment_number END) AS showed_up,
+  COUNT(DISTINCT CASE WHEN s.ro_number IS NULL THEN a.appointment_number END) AS no_shows,
+  ROUND(100.0 * COUNT(DISTINCT CASE WHEN s.ro_number IS NOT NULL THEN a.appointment_number END)
+        / NULLIF(COUNT(DISTINCT a.appointment_number), 0), 1) AS show_rate_pct
 FROM dms_appointments a
+LEFT JOIN dms_service s ON a.vin = s.vin
+  AND s.open_date BETWEEN a.appointment_date - INTERVAL 3 DAY AND a.appointment_date + INTERVAL 3 DAY
 WHERE a.appointment_date >= (SELECT wk FROM anchor)
 
 -- NO-SHOWS PER ADVISOR
+-- NOTE: ro_number in dms_appointments is always empty. Use VIN+date join to dms_service to detect no-shows.
 WITH anchor AS (SELECT DATE_TRUNC('week', MAX(appointment_date)) AS wk FROM dms_appointments)
-SELECT service_advisor_name,
-       COUNT(DISTINCT appointment_number) AS total_booked,
-       COUNT(DISTINCT CASE WHEN ro_number IS NULL OR ro_number = '' THEN appointment_number END) AS no_shows
-FROM dms_appointments
-WHERE appointment_date >= (SELECT wk FROM anchor)
-GROUP BY service_advisor_name ORDER BY no_shows DESC
+SELECT a.service_advisor_name,
+       COUNT(DISTINCT a.appointment_number) AS total_booked,
+       COUNT(DISTINCT CASE WHEN s.ro_number IS NULL THEN a.appointment_number END) AS no_shows,
+       COUNT(DISTINCT CASE WHEN s.ro_number IS NOT NULL THEN a.appointment_number END) AS showed_up
+FROM dms_appointments a
+LEFT JOIN dms_service s ON a.vin = s.vin
+  AND s.open_date BETWEEN a.appointment_date - INTERVAL 3 DAY AND a.appointment_date + INTERVAL 3 DAY
+WHERE a.appointment_date >= (SELECT wk FROM anchor)
+GROUP BY a.service_advisor_name ORDER BY no_shows DESC
 
 -- APPOINTMENTS SCHEDULED FOR TOMORROW / NEXT DAY
 WITH anchor AS (SELECT MAX(appointment_date) AS latest FROM dms_appointments)
@@ -1100,10 +1107,13 @@ WHERE s.ro_status NOT ILIKE '%clos%'
   AND a.appointment_date > (SELECT MAX(close_date) FROM dms_service WHERE ro_status ILIKE '%clos%')
 
 -- APPOINTMENTS WITH NO RO OPENED (no-shows / walk-aways)
+-- ro_number in dms_appointments is always empty — use LEFT JOIN to dms_service to find no-shows
 SELECT a.appointment_number, a.customer_name, a.vin, a.make, a.model,
        a.appointment_date, a.service_advisor_name, a.operation_code_description
 FROM dms_appointments a
-WHERE (a.ro_number IS NULL OR a.ro_number = '')
+LEFT JOIN dms_service s ON a.vin = s.vin
+  AND s.open_date BETWEEN a.appointment_date - INTERVAL 3 DAY AND a.appointment_date + INTERVAL 3 DAY
+WHERE s.ro_number IS NULL
 ORDER BY a.appointment_date DESC LIMIT 50
 
 -- RETENTION RATE: CUSTOMERS RETURNED WITHIN 6 MONTHS
@@ -1238,7 +1248,8 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - In dms_inventory: vehicle_status is EMPTY STRING '' for active/in-stock units; 'NOT IN INVENTORY' for units no longer on the lot. NEVER use vehicle_status ILIKE '%stock%' — it returns 0. Use: vehicle_status NOT ILIKE '%not in%' OR vehicle_status = '' to mean "in stock/active"
 - customer_number is the join key for appointments, service, and sales (NOT in inventory)
 - Primary cross-table join key: VIN
-- To detect no-shows: appointment has ro_number IS NULL or ro_number = '' in dms_appointments
+- CRITICAL: ro_number in dms_appointments is ALWAYS EMPTY in this dataset — NEVER use it to detect show-ups or no-shows
+- To detect show-ups/no-shows: LEFT JOIN dms_appointments to dms_service ON vin=vin AND s.open_date BETWEEN a.appointment_date - INTERVAL 3 DAY AND a.appointment_date + INTERVAL 3 DAY — a matching service row = showed up, no match = no-show
 - To detect appointment-based ROs: dms_service.appointment_flag ILIKE '%y%'
 - Known dealer: 'Stephen Wade Nissan' — always match with ILIKE
 - dms_inventory has a file_date (DATE) column representing the snapshot date — use as proxy for "today" when computing days in inventory
