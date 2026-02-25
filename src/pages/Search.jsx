@@ -8,6 +8,7 @@ import RecommendationCard from '../components/search/RecommendationCard';
 import CampaignEditor from '../components/search/CampaignEditor';
 import { GridBackground } from '../components/ui/GridBackground';
 import { maskName, maskVin } from '../lib/utils';
+import ChartRenderer from '../components/search/ChartRenderer';
 
 // Backend URL for the Stephen Wade Group real DMS chatbot
 const CHATBOT_API_URL = 'https://atlas-ai-demo.onrender.com';
@@ -216,6 +217,7 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
           isStrategy: data.is_strategy,
           rows: data.rows || [],
           columns: data.columns || [],
+          chartConfig: data.chart_config || null,
         });
       } catch (err) {
         setError(err.message || 'Could not reach the DMS backend. Make sure it is running.');
@@ -613,6 +615,13 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
               </p>
             )}
           </Card>
+
+          {/* Chart — auto-rendered when data has analytical structure */}
+          {!swAnswer.isStrategy && swAnswer.chartConfig && (
+            <Card className="p-6 mb-6">
+              <ChartRenderer chartConfig={swAnswer.chartConfig} rows={swAnswer.rows} />
+            </Card>
+          )}
 
           {/* Data table — only rendered when SQL returned rows */}
           {hasTable && (

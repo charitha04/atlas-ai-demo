@@ -1538,6 +1538,66 @@ def answer_question(
 
 
 # ---------------------------------------------------------------
+# Chart config generation
+# ---------------------------------------------------------------
+_ID_KEYWORDS = {"id", "uuid", "vin", "imei", "number", "zip", "phone", "code", "ro_number"}
+
+
+def _is_meaningful_numeric(col: str) -> bool:
+    return not any(k in col.lower() for k in _ID_KEYWORDS)
+
+
+def _is_date_like(series: pd.Series) -> bool:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    sample = series.dropna().head(5).astype(str)
+    return sum(bool(re.search(r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}", v)) for v in sample) >= 3
+
+
+def build_chart_config(df: pd.DataFrame, question: str) -> dict | None:
+    """
+    Analyse the result DataFrame and return a chart config dict, or None if no chart is appropriate.
+    Config shape: { type, x_col, y_col, title }
+    """
+    if df is None or df.empty or len(df) < 3:
+        return None
+    # Single-value result — no chart
+    if df.shape == (1, 1):
+        return None
+
+    numeric_cols = [c for c in df.select_dtypes(include="number").columns if _is_meaningful_numeric(c)]
+    if not numeric_cols:
+        return None
+
+    y_col = numeric_cols[0]
+    text_cols = [c for c in df.columns if c not in df.select_dtypes(include="number").columns]
+    date_cols = [c for c in df.columns if _is_date_like(df[c])]
+
+    title = question.strip().capitalize()
+
+    # Line chart: date x-axis
+    if date_cols:
+        return {"type": "line", "x_col": date_cols[0], "y_col": y_col, "title": title}
+
+    if not text_cols:
+        return None
+
+    x_col = text_cols[0]
+    unique_vals = df[x_col].nunique()
+
+    # Pie chart: categorical with ≤8 distinct values and 1 numeric column
+    if unique_vals <= 8 and len(numeric_cols) == 1:
+        return {"type": "pie", "x_col": x_col, "y_col": y_col, "title": title}
+
+    # Horizontal bar: many categories
+    if unique_vals > 10:
+        return {"type": "bar_horizontal", "x_col": x_col, "y_col": y_col, "title": title}
+
+    # Vertical bar: default
+    return {"type": "bar", "x_col": x_col, "y_col": y_col, "title": title}
+
+
+# ---------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------
 app = FastAPI(title="Ikon DMS Chatbot API")
@@ -1572,6 +1632,7 @@ class ChatResponse(BaseModel):
     available_models: list[str]
     rows: list[dict] = []
     columns: list[str] = []
+    chart_config: dict | None = None
 
 
 @app.get("/health")
@@ -1603,6 +1664,10 @@ def chat(request: ChatRequest):
     )
 
     columns = list(rows[0].keys()) if rows else []
+    chart_config = None
+    if rows and not is_strategy:
+        rows_df = pd.DataFrame(rows)
+        chart_config = build_chart_config(rows_df, request.question)
 
     return ChatResponse(
         answer=answer,
@@ -1612,4 +1677,5 @@ def chat(request: ChatRequest):
         available_models=list(MODEL_OPTIONS.keys()),
         rows=rows,
         columns=columns,
+        chart_config=chart_config,
     )
