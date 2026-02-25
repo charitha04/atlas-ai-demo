@@ -482,7 +482,7 @@ def _create_connection() -> duckdb.DuckDBPyConnection:
 # ---------------------------------------------------------------
 def validate_sql(sql: str) -> str:
     s = (sql or "").strip().strip(";")
-    if not re.match(r"(?is)^\s*select\b", s):
+    if not re.match(r"(?is)^\s*(select|with)\b", s):
         raise ValueError("Only SELECT queries are allowed")
     if re.search(FORBIDDEN, s, flags=re.IGNORECASE):
         raise ValueError("Forbidden SQL detected")
