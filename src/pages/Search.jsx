@@ -10,7 +10,7 @@ import { GridBackground } from '../components/ui/GridBackground';
 import { maskName, maskVin } from '../lib/utils';
 
 // Backend URL for the Stephen Wade Group real DMS chatbot
-const CHATBOT_API_URL = 'http://localhost:8000';
+const CHATBOT_API_URL = 'https://atlas-ai-demo.onrender.com';
 
 // Conversation starters for mock-data accounts (Prestige Toyota, Luxury Honda, Elite Ford)
 const conversationStarters = [
