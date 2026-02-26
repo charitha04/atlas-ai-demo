@@ -500,6 +500,11 @@ def _get_connection() -> duckdb.DuckDBPyConnection:
 # ---------------------------------------------------------------
 def validate_sql(sql: str) -> str:
     s = (sql or "").strip().strip(";")
+    # Dataset guardrails:
+    # Some models still emit ro_status-based filters even though ro_status is empty in this dataset.
+    # Rewrite the common patterns to the correct closed/open logic so queries don't accidentally return 0.
+    s = re.sub(r"(?is)\bro_status\s+not\s+ilike\s+'%clos%'\b", "close_date IS NULL", s)
+    s = re.sub(r"(?is)\bro_status\s+ilike\s+'%clos%'\b", "close_date IS NOT NULL", s)
     if not re.match(r"(?is)^\s*(select|with)\b", s):
         raise ValueError("Only SELECT queries are allowed")
     if re.search(FORBIDDEN, s, flags=re.IGNORECASE):
@@ -774,9 +779,11 @@ def build_prompt(question: str, conversation_history: list[dict] | None = None) 
 
 dms_service (repair orders — one row per operation line per RO):
   Identity:     vin, customer_number, customer_name, ro_number
-  Status:       ro_status ('Open'|'Closed'), ro_department
+  Status:       ro_status (ALWAYS EMPTY in this dataset — DO NOT USE), ro_department
+                Use close_date IS NOT NULL to identify closed ROs; close_date IS NULL for open ROs
   Dates:        open_date (DATE), close_date (DATE), promise_date (DATE), pickup_date (DATE)
-  Tech/Advisor: service_advisor_name, tech_name, tech_number
+  Tech/Advisor: service_advisor_name (POPULATED — use for advisor queries)
+                tech_name (EMPTY in this dataset — DO NOT USE; redirect technician questions to service_advisor_name)
   Hours:        labor_bill_hours, labor_tech_hours (VARCHAR — cast to DOUBLE for math)
   Rates:        labor_bill_rate, labor_tech_rate (VARCHAR — cast to DOUBLE)
   Operations:   operation_codes (pipe-delimited e.g. 'ELOF|MPI'), operation_code_descriptions,
@@ -845,13 +852,13 @@ dms_events (unified activity stream across all 4 tables):
 ━━━━━━━━━━━━━━━━━ SQL EXAMPLES BY QUESTION TYPE ━━━━━━━━━━━━━━━━━
 
 -- SERVICE REVENUE TODAY / MOST RECENT DAY
-WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE close_date IS NOT NULL)
 SELECT ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue,
        COUNT(DISTINCT ro_number) AS ro_count
-FROM dms_service WHERE close_date = (SELECT latest FROM anchor) AND ro_status ILIKE '%clos%'
+FROM dms_service WHERE close_date = (SELECT latest FROM anchor) AND close_date IS NOT NULL
 
 -- SERVICE REVENUE THIS WEEK VS LAST WEEK
-WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE close_date IS NOT NULL),
      week_start AS (SELECT DATE_TRUNC('week', (SELECT latest FROM anchor)) AS ws)
 SELECT
   CASE WHEN close_date >= (SELECT ws FROM week_start) THEN 'This Week' ELSE 'Last Week' END AS week_label,
@@ -860,31 +867,31 @@ SELECT
 FROM dms_service
 WHERE close_date >= (SELECT ws FROM week_start) - INTERVAL 7 DAY
   AND close_date < (SELECT ws FROM week_start) + INTERVAL 7 DAY
-  AND ro_status ILIKE '%clos%'
+  AND close_date IS NOT NULL
 GROUP BY 1 ORDER BY 1
 
 -- AVERAGE RO VALUE (effective revenue per closed RO)
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS month_start FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS month_start FROM dms_service WHERE close_date IS NOT NULL)
 SELECT ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)) / NULLIF(COUNT(DISTINCT ro_number),0),2) AS avg_ro_value,
        COUNT(DISTINCT ro_number) AS total_ros
 FROM dms_service
-WHERE close_date >= (SELECT month_start FROM anchor) AND ro_status ILIKE '%clos%'
+WHERE close_date >= (SELECT month_start FROM anchor) AND close_date IS NOT NULL
 
 -- EFFECTIVE LABOR RATE (total labor revenue ÷ billed hours)
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE close_date IS NOT NULL)
 SELECT ROUND(SUM(try_cast(total_labor_sale AS DOUBLE)) / NULLIF(SUM(try_cast(labor_bill_hours AS DOUBLE)),0),2) AS effective_labor_rate,
        ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)),1) AS total_billed_hours,
        ROUND(SUM(try_cast(total_labor_sale AS DOUBLE)),2) AS total_labor_revenue
 FROM dms_service
-WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+WHERE close_date >= (SELECT m FROM anchor) AND close_date IS NOT NULL
 
 -- TOP ADVISOR BY REVENUE
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE close_date IS NOT NULL)
 SELECT service_advisor_name,
        COUNT(DISTINCT ro_number) AS ro_count,
        ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue
 FROM dms_service
-WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+WHERE close_date >= (SELECT m FROM anchor) AND close_date IS NOT NULL
 GROUP BY service_advisor_name ORDER BY revenue DESC LIMIT 10
 
 -- OPEN ROs OVER 3 DAYS OLD (stalled)
@@ -892,27 +899,27 @@ WITH anchor AS (SELECT MAX(open_date) AS latest FROM dms_service)
 SELECT DISTINCT ro_number, customer_name, vin, make, model, year, service_advisor_name,
        open_date, DATEDIFF('day', open_date, (SELECT latest FROM anchor)) AS days_open
 FROM dms_service
-WHERE ro_status NOT ILIKE '%clos%' AND open_date IS NOT NULL
+WHERE close_date IS NULL AND open_date IS NOT NULL
   AND DATEDIFF('day', open_date, (SELECT latest FROM anchor)) > 3
 ORDER BY days_open DESC
 
 -- OPEN ROs CURRENTLY IN PROGRESS (count + list)
 SELECT DISTINCT ro_number, customer_name, vin, make, model, year, open_date,
        service_advisor_name, tech_name, ro_department
-FROM dms_service WHERE ro_status NOT ILIKE '%clos%'
+FROM dms_service WHERE close_date IS NULL
 ORDER BY open_date
 
 -- TECHNICIAN WITH MOST OPEN JOBS
 SELECT tech_name, COUNT(DISTINCT ro_number) AS open_jobs
-FROM dms_service WHERE ro_status NOT ILIKE '%clos%' AND tech_name IS NOT NULL AND tech_name != ''
+FROM dms_service WHERE close_date IS NULL AND tech_name IS NOT NULL AND tech_name != ''
 GROUP BY tech_name ORDER BY open_jobs DESC LIMIT 10
 
 -- AVERAGE CYCLE TIME (open to close in days)
-WITH anchor AS (SELECT DATE_TRUNC('week', MAX(close_date)) AS wk FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('week', MAX(close_date)) AS wk FROM dms_service WHERE close_date IS NOT NULL)
 SELECT ROUND(AVG(DATEDIFF('day', open_date, close_date)),1) AS avg_cycle_days,
        COUNT(DISTINCT ro_number) AS ro_count
 FROM dms_service
-WHERE close_date >= (SELECT wk FROM anchor) AND ro_status ILIKE '%clos%'
+WHERE close_date >= (SELECT wk FROM anchor) AND close_date IS NOT NULL
   AND open_date IS NOT NULL AND close_date IS NOT NULL
 
 -- APPOINTMENT SHOW RATE
@@ -1069,14 +1076,14 @@ WHERE i.inventory_date IS NOT NULL AND s.booked_date IS NOT NULL
 GROUP BY i.make, i.model HAVING COUNT(DISTINCT i.vin) >= 3 ORDER BY avg_days_to_sell
 
 -- CUSTOMER-PAY VS WARRANTY MIX
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE close_date IS NOT NULL)
 SELECT
   ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS customer_pay_revenue,
   ROUND(SUM(try_cast(warranty_total_sale AS DOUBLE)),2) AS warranty_revenue,
   ROUND(SUM(try_cast(internal_total_sale AS DOUBLE)),2) AS internal_revenue,
   ROUND(100.0 * SUM(try_cast(customer_total_sale AS DOUBLE))
         / NULLIF(SUM(try_cast(total_sale AS DOUBLE)),0), 1) AS customer_pay_pct
-FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND close_date IS NOT NULL
 
 -- DECLINED SERVICES (recommendations not taken)
 SELECT DISTINCT ro_number, customer_name, vin, make, model, service_advisor_name,
@@ -1094,13 +1101,13 @@ WHERE s.recommendations IS NOT NULL AND TRIM(s.recommendations) != ''
 ORDER BY s.open_date DESC
 
 -- HIGH-VALUE CUSTOMERS WHO HAVEN'T RETURNED IN 6 MONTHS
-WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE close_date IS NOT NULL),
 customer_stats AS (
   SELECT customer_number, customer_name,
          MAX(close_date) AS last_visit,
          COUNT(DISTINCT ro_number) AS total_visits,
          ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS lifetime_spend
-  FROM dms_service WHERE ro_status ILIKE '%clos%' GROUP BY customer_number, customer_name
+  FROM dms_service WHERE close_date IS NOT NULL GROUP BY customer_number, customer_name
 )
 SELECT customer_name, last_visit, total_visits, lifetime_spend,
        DATEDIFF('day', last_visit, (SELECT latest FROM anchor)) AS days_since_last_visit
@@ -1127,7 +1134,7 @@ SELECT DISTINCT s.customer_name, s.vin, s.make, s.model, s.year,
        MAX(s.close_date) AS last_service
 FROM dms_service s
 LEFT JOIN dms_sales sa ON s.vin = sa.vin
-WHERE sa.vin IS NULL AND s.ro_status ILIKE '%clos%'
+WHERE sa.vin IS NULL AND s.close_date IS NOT NULL
 GROUP BY s.customer_name, s.vin, s.make, s.model, s.year ORDER BY service_count DESC LIMIT 50
 
 -- INVENTORY VEHICLES WITH OPEN ROs IN THE SHOP
@@ -1138,11 +1145,11 @@ WHERE i.open_ro_number IS NOT NULL AND TRIM(i.open_ro_number) != ''
   AND i.vehicle_status NOT ILIKE '%not in%'
 
 -- VEHICLES WITH MULTIPLE ROs IN 30 DAYS
-WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE close_date IS NOT NULL)
 SELECT vin, customer_name, make, model, COUNT(DISTINCT ro_number) AS ro_count,
        MIN(open_date) AS first_ro, MAX(close_date) AS last_ro
 FROM dms_service
-WHERE close_date >= (SELECT latest - INTERVAL 30 DAY FROM anchor) AND ro_status ILIKE '%clos%'
+WHERE close_date >= (SELECT latest - INTERVAL 30 DAY FROM anchor) AND close_date IS NOT NULL
 GROUP BY vin, customer_name, make, model HAVING COUNT(DISTINCT ro_number) > 1
 ORDER BY ro_count DESC
 
@@ -1151,8 +1158,8 @@ SELECT DISTINCT s.customer_name, s.vin, s.make, s.model, s.ro_number, s.open_dat
        a.appointment_date, a.service_advisor_name
 FROM dms_service s
 JOIN dms_appointments a ON s.vin = a.vin
-WHERE s.ro_status NOT ILIKE '%clos%'
-  AND a.appointment_date > (SELECT MAX(close_date) FROM dms_service WHERE ro_status ILIKE '%clos%')
+WHERE s.close_date IS NULL
+  AND a.appointment_date > (SELECT MAX(close_date) FROM dms_service WHERE close_date IS NOT NULL)
 
 -- APPOINTMENTS WITH NO RO OPENED (no-shows / walk-aways)
 -- ro_number in dms_appointments is always empty — use LEFT JOIN to dms_service to find no-shows
@@ -1167,14 +1174,14 @@ ORDER BY a.appointment_date DESC LIMIT 50
 -- RETENTION RATE: CUSTOMERS RETURNED WITHIN 6 MONTHS
 WITH first_visits AS (
   SELECT customer_number, MIN(close_date) AS first_visit FROM dms_service
-  WHERE ro_status ILIKE '%clos%' GROUP BY customer_number
+  WHERE close_date IS NOT NULL GROUP BY customer_number
 ),
 return_visits AS (
   SELECT s.customer_number FROM dms_service s
   JOIN first_visits f ON s.customer_number = f.customer_number
   WHERE s.close_date > f.first_visit
     AND s.close_date <= f.first_visit + INTERVAL 180 DAY
-    AND s.ro_status ILIKE '%clos%'
+    AND s.close_date IS NOT NULL
   GROUP BY s.customer_number
 )
 SELECT COUNT(DISTINCT f.customer_number) AS total_customers,
@@ -1183,13 +1190,13 @@ SELECT COUNT(DISTINCT f.customer_number) AS total_customers,
 FROM first_visits f LEFT JOIN return_visits r ON f.customer_number = r.customer_number
 
 -- TECHNICIAN PRODUCTIVITY (billed hours vs tech hours)
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE close_date IS NOT NULL)
 SELECT tech_name,
        COUNT(DISTINCT ro_number) AS ro_count,
        ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)),1) AS billed_hours,
        ROUND(SUM(try_cast(labor_tech_hours AS DOUBLE)),1) AS tech_hours,
        ROUND(SUM(try_cast(labor_bill_hours AS DOUBLE)) / NULLIF(SUM(try_cast(labor_tech_hours AS DOUBLE)),0),2) AS efficiency_ratio
-FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+FROM dms_service WHERE close_date >= (SELECT m FROM anchor) AND close_date IS NOT NULL
   AND tech_name IS NOT NULL AND tech_name != ''
 GROUP BY tech_name ORDER BY billed_hours DESC
 
@@ -1216,12 +1223,12 @@ ORDER BY times_performed DESC
 LIMIT 5
 
 -- TOP SERVICES THIS MONTH (with date filter)
-WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE close_date IS NOT NULL)
 SELECT TRIM(service_type) AS service_type, COUNT(*) AS times_performed
 FROM (
     SELECT UNNEST(STRING_SPLIT(operation_code_descriptions, '|')) AS service_type
     FROM dms_service
-    WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+    WHERE close_date >= (SELECT m FROM anchor) AND close_date IS NOT NULL
       AND operation_code_descriptions IS NOT NULL AND TRIM(operation_code_descriptions) != ''
 ) sub
 WHERE TRIM(service_type) != ''
@@ -1244,14 +1251,14 @@ FROM dms_sales WHERE booked_date >= (SELECT m FROM anchor)
 GROUP BY new_or_used
 
 -- PACE: ARE WE AHEAD OR BEHIND LAST MONTH?
-WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE ro_status ILIKE '%clos%'),
+WITH anchor AS (SELECT MAX(close_date) AS latest FROM dms_service WHERE close_date IS NOT NULL),
 this_month AS (
   SELECT COUNT(DISTINCT ro_number) AS ros,
          ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue,
          DAY((SELECT latest FROM anchor)) AS days_elapsed
   FROM dms_service
   WHERE close_date >= DATE_TRUNC('month', (SELECT latest FROM anchor))
-    AND ro_status ILIKE '%clos%'
+    AND close_date IS NOT NULL
 ),
 last_month AS (
   SELECT COUNT(DISTINCT ro_number) AS ros,
@@ -1259,7 +1266,7 @@ last_month AS (
   FROM dms_service
   WHERE close_date >= DATE_TRUNC('month', (SELECT latest FROM anchor)) - INTERVAL 1 MONTH
     AND close_date < DATE_TRUNC('month', (SELECT latest FROM anchor))
-    AND ro_status ILIKE '%clos%'
+    AND close_date IS NOT NULL
 )
 SELECT
   t.ros AS this_month_ros, l.ros AS last_month_ros,
@@ -1280,7 +1287,7 @@ anchor_appt AS (
 anchor_svc AS (
   SELECT DATE_TRUNC('month', MAX(close_date)) - INTERVAL 1 MONTH AS m_start,
          DATE_TRUNC('month', MAX(close_date)) AS m_end
-  FROM dms_service WHERE ro_status ILIKE '%clos%'
+  FROM dms_service WHERE close_date IS NOT NULL
 ),
 appts AS (
   SELECT COUNT(DISTINCT appointment_number) AS appointments_last_month
@@ -1290,7 +1297,7 @@ appts AS (
 services AS (
   SELECT COUNT(DISTINCT ro_number) AS services_closed_last_month
   FROM dms_service s, anchor_svc sa
-  WHERE s.close_date >= sa.m_start AND s.close_date < sa.m_end AND s.ro_status ILIKE '%clos%'
+  WHERE s.close_date >= sa.m_start AND s.close_date < sa.m_end AND s.close_date IS NOT NULL
 )
 SELECT a.appointments_last_month, s.services_closed_last_month FROM appts a, services s
 
@@ -1304,8 +1311,8 @@ service_this_month AS (
   SELECT COUNT(DISTINCT ro_number) AS ro_count,
          ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) AS revenue
   FROM dms_service
-  WHERE close_date >= DATE_TRUNC('month', (SELECT MAX(close_date) FROM dms_service WHERE ro_status ILIKE '%clos%'))
-    AND ro_status ILIKE '%clos%'
+  WHERE close_date >= DATE_TRUNC('month', (SELECT MAX(close_date) FROM dms_service WHERE close_date IS NOT NULL))
+    AND close_date IS NOT NULL
 )
 SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_this_month sr
 """.strip()
@@ -1318,8 +1325,9 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - Date columns are DATE type — use them directly for comparisons; do not use the *_raw columns
 - NEVER use CURRENT_DATE — always anchor to MAX(date) in the relevant table
 - CRITICAL: If the question does NOT mention a specific time period (e.g. "today", "this month", "last week"), do NOT add any date filter at all — query all available data
-- ro_status for closed ROs: use ro_status ILIKE '%clos%' (not exact equality)
-- ro_status for open ROs: use ro_status NOT ILIKE '%clos%'
+- CRITICAL: ro_status is ALWAYS EMPTY STRING in this dataset — NEVER use ro_status ILIKE '%clos%' or any ro_status filter, it will always return 0 rows
+- To identify CLOSED ROs: use close_date IS NOT NULL (close_date is populated when the RO is closed)
+- To identify OPEN/IN-PROGRESS ROs: use close_date IS NULL
 - operation_code_descriptions is pipe-delimited (e.g. 'REPAIR TIRE|MULTI POINT INSPECTION') — to count individual service types, use STRING_SPLIT and UNNEST. Use ILIKE '%keyword%' for searching within it
 - In dms_inventory: vehicle_status is EMPTY STRING '' for active/in-stock units; 'NOT IN INVENTORY' for units no longer on the lot. NEVER use vehicle_status ILIKE '%stock%' — it returns 0. Use: vehicle_status NOT ILIKE '%not in%' OR vehicle_status = '' to mean "in stock/active"
 - customer_number is the join key for appointments, service, and sales (NOT in inventory)
@@ -1336,7 +1344,7 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 
 VAGUE DEALER QUESTIONS → interpret as follows:
   "How are we looking today?" → service revenue + RO count for MAX close_date day in dms_service
-  "Anything stuck in the shop?" → open ROs older than 3 days (ro_status NOT ILIKE '%clos%', days_open > 3)
+  "Anything stuck in the shop?" → open ROs older than 3 days (close_date IS NULL, days_open > 3)
   "What's hurting us right now?" → open ROs > 3 days old + recent low show-rate advisors
   "Are we busy tomorrow?" → appointment count for MAX(appointment_date)+1 day
   "Who's killing it this month?" → top advisor by revenue this month (dms_service)
@@ -1377,7 +1385,7 @@ Customer synonyms:
 
 People synonyms:
   advisor / SA / service writer / writer → service_advisor_name
-  tech / technician / mechanic → tech_name
+  tech / technician / mechanic → tech_name is EMPTY; use service_advisor_name instead
   salesperson / sales rep / salesman → salesman_1_name
   F&I / finance manager / finance person → finance_manager_name
   GM / general manager / dealer principal → no column; answer with aggregate summary
