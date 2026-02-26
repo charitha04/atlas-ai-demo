@@ -412,38 +412,6 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
     document.body.removeChild(link);
   };
 
-  const handleAISearch = async (e, query) => {
-    if (e) {
-      e.preventDefault();
-    }
-    const searchText = query || searchQuery;
-    if (!searchText.trim()) {
-      setAiRecommendation(null);
-      setSearchResults(null);
-      setError(null);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setAiRecommendation(null);
-    setSearchResults(null);
-
-    try {
-      const recommendation = await searchAIRecommendation(searchText, customers);
-      if (recommendation) {
-        setAiRecommendation(recommendation);
-        setShowRecommendationCard(true);
-      } else {
-        setError('No recommendation found — try refining your query');
-      }
-    } catch (err) {
-      setError(err.message || 'AI service failed — please try again');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handlePromptClick = (prompt) => {
     // Only populate the input field, user clicks "Ask" to proceed
     setSearchQuery(prompt);
