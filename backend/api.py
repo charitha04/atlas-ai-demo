@@ -241,6 +241,7 @@ TABLE_DOCS: dict[str, dict] = {
             "city": "City.", "state": "State.", "dealer_name": "Dealer.", "dv_dealer_id": "Dealer ID.",
             "booked_date_raw": "Booked date (raw).", "booked_date": "Booked date (DATE).",
             "accounting_date_raw": "Accounting date (raw).", "accounting_date": "Accounting date (DATE).",
+            "file_date": "Snapshot date (DATE) — use MAX(file_date) as the latest sales snapshot to avoid duplicates.",
         },
     },
     "dms_events": {
@@ -427,7 +428,8 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("Contract Date","contract_date_raw")}, {date_expr("Contract Date","contract_date")},
             {raw_expr("Delivery Date","delivery_date_raw")}, {date_expr("Delivery Date","delivery_date")},
             {raw_expr("Booked Date","booked_date_raw")}, {date_expr("Booked Date","booked_date")},
-            {raw_expr("Accounting Date","accounting_date_raw")}, {date_expr("Accounting Date","accounting_date")}
+            {raw_expr("Accounting Date","accounting_date_raw")}, {date_expr("Accounting Date","accounting_date")},
+            file_date
         FROM read_parquet('{parquet_glob("sales")}')
     """)
 
@@ -575,7 +577,10 @@ def validate_sql(sql: str) -> str:
     lower = s.lower()
     if "from dms_inventory" in lower and "file_date" not in lower:
         alias_match = re.search(r"(?is)\bfrom\s+dms_inventory\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b", s)
-        inv_ref = f"{alias_match.group(1)}.file_date" if alias_match else "file_date"
+        alias = alias_match.group(1) if alias_match else None
+        if alias and alias.lower() in {"where", "join", "group", "order", "limit", "on"}:
+            alias = None
+        inv_ref = f"{alias}.file_date" if alias else "file_date"
         snap_filter = f"{inv_ref} = (SELECT MAX(file_date) FROM dms_inventory)"
 
         boundary_match = re.search(r"(?is)\b(group\s+by|order\s+by|limit)\b", s)
@@ -587,6 +592,18 @@ def validate_sql(sql: str) -> str:
             head = head.rstrip() + f" AND {snap_filter} "
         else:
             head = head.rstrip() + f" WHERE {snap_filter} "
+        s = head + tail
+
+    # Sales de-duplication guardrail:
+    # dms_sales contains repeated snapshots of deals across file_date. For list queries, dedupe to the
+    # latest record per deal_number using QUALIFY + ROW_NUMBER over file_date.
+    lower = s.lower()
+    is_aggregate_guess = any(k in lower for k in ["count(", "avg(", "min(", "max(", "sum("]) or "group by" in lower
+    if "from dms_sales" in lower and "qualify" not in lower and not is_aggregate_guess:
+        boundary_match = re.search(r"(?is)\b(order\s+by|limit)\b", s)
+        boundary_idx = boundary_match.start() if boundary_match else len(s)
+        head, tail = s[:boundary_idx], s[boundary_idx:]
+        head = head.rstrip() + " QUALIFY ROW_NUMBER() OVER (PARTITION BY deal_number ORDER BY file_date DESC) = 1 "
         s = head + tail
 
     if not re.match(r"(?is)^\s*(select|with)\b", s):
@@ -1647,15 +1664,30 @@ def run_question(
     question: str,
     model_name: str,
     conversation_history: list[dict] | None = None,
-) -> tuple[str, pd.DataFrame]:
+) -> tuple[str, pd.DataFrame, dict]:
     prompt = build_prompt(question, conversation_history=conversation_history)
     raw_sql = _call_llm_for_sql(prompt, model_name)
     logger.info("[SQL] Raw: %s", raw_sql)
     sql = validate_sql(raw_sql)
     logger.info("[SQL] Validated: %s", sql)
 
+    meta: dict[str, object] = {"is_truncated": False, "total_rows": None}
     con = _get_connection()
     result_df = con.execute(sql).df()
+
+    # If validate_sql auto-appended LIMIT {RESULT_LIMIT}, compute the true total count so the UI
+    # and narrative can say "showing first N of total" instead of treating N as the total.
+    raw_lower = (raw_sql or "").lower()
+    validated_lower = (sql or "").lower()
+    auto_limited = ("limit" not in raw_lower) and bool(re.search(rf"(?is)\blimit\s+{RESULT_LIMIT}\s*;?\s*$", validated_lower))
+    if auto_limited:
+        base_sql = re.sub(rf"(?is)\blimit\s+{RESULT_LIMIT}\s*;?\s*$", "", sql).strip().rstrip(";")
+        try:
+            total_rows = con.execute(f"SELECT COUNT(*) AS total_rows FROM ({base_sql}) AS q").fetchone()[0]
+            meta["total_rows"] = int(total_rows) if total_rows is not None else None
+            meta["is_truncated"] = bool(total_rows is not None and int(total_rows) > RESULT_LIMIT)
+        except Exception as exc:
+            logger.info("[SQL] Count query failed (non-fatal): %s", exc)
 
     # Retry once with relaxed filters if we got empty results
     if result_df.empty:
@@ -1674,11 +1706,11 @@ def run_question(
             result_df2 = con2.execute(sql2).df()
             if not result_df2.empty:
                 logger.info("[SQL] Retry succeeded with %d rows", len(result_df2))
-                return sql2, result_df2
+                return sql2, result_df2, {"is_truncated": False, "total_rows": None}
         except Exception as retry_exc:
             logger.warning("[SQL] Retry failed: %s", retry_exc)
 
-    return sql, result_df
+    return sql, result_df, meta
 
 
 def _format_date_friendly(date_str: str) -> str:
@@ -1903,6 +1935,8 @@ def generate_detailed_answer(
     sql: str,
     out: pd.DataFrame,
     model_name: str,
+    total_rows: int | None = None,
+    is_truncated: bool = False,
 ) -> str:
     q = (question or "").strip()
 
@@ -1929,6 +1963,13 @@ def generate_detailed_answer(
         "the answer covers.\n"
     ) if time_relative else ""
 
+    truncation_rule = ""
+    if is_truncated and total_rows is not None:
+        truncation_rule = (
+            f"- IMPORTANT: The table below is truncated. It shows only the first {row_count} rows out of {total_rows} total matching records. "
+            "Do NOT treat the number of rows shown as the total.\n"
+        )
+
     user_prompt = f"""
 You are Atlas AI, a trusted advisor for this car dealership. You know the dealership's data inside-out and speak like a seasoned manager — direct, specific, and helpful.
 
@@ -1940,7 +1981,7 @@ RULES:
 - Write in plain conversational prose. No markdown, no asterisks, no bullet points, no bold.
 - 2 to 4 sentences max.
 - Lead with the key number or finding right away (e.g. "We closed 847 repair orders last month...").
-{time_clarification_rule}- Translate the data into business meaning — what does this number mean for the dealership?
+{time_clarification_rule}{truncation_rule}- Translate the data into business meaning — what does this number mean for the dealership?
 - If results show a comparison (e.g. this week vs last week), highlight the trend and % change.
 - If it's a list/show request, say what was found and that the full table is shown below.
 - End with ONE short, specific action the dealership could take based on the data (only if it adds value — skip for simple count/list questions).
@@ -2276,8 +2317,20 @@ def answer_question(
         return answer, sql, False, []
 
     try:
-        sql, result_df = run_question(question, model_name, conversation_history)
-        answer = generate_detailed_answer(question, sql, result_df, model_name)
+        sql, result_df, meta = run_question(question, model_name, conversation_history)
+        answer = generate_detailed_answer(
+            question,
+            sql,
+            result_df,
+            model_name,
+            total_rows=meta.get("total_rows") if isinstance(meta, dict) else None,
+            is_truncated=bool(isinstance(meta, dict) and meta.get("is_truncated")),
+        )
+        if isinstance(meta, dict) and meta.get("is_truncated") and meta.get("total_rows"):
+            answer = (
+                answer.rstrip()
+                + f" Showing first {RESULT_LIMIT} rows out of {int(meta['total_rows'])} total matching records."
+            ).strip()
         rows = result_df.head(200).to_dict(orient="records")
         return answer, sql, False, rows
     except Exception as exc:
