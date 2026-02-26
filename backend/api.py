@@ -1200,6 +1200,33 @@ FROM dms_service
 WHERE upsell ILIKE '%y%' AND operation_code_descriptions IS NOT NULL
 GROUP BY operation_code_descriptions ORDER BY upsell_count DESC LIMIT 20
 
+-- TOP 5 SERVICE TYPES PERFORMED (ALL TIME — no date filter needed)
+-- operation_code_descriptions is pipe-delimited; split to count individual service types
+SELECT TRIM(service_type) AS service_type,
+       COUNT(*) AS times_performed
+FROM (
+    SELECT UNNEST(STRING_SPLIT(operation_code_descriptions, '|')) AS service_type
+    FROM dms_service
+    WHERE operation_code_descriptions IS NOT NULL
+      AND TRIM(operation_code_descriptions) != ''
+) sub
+WHERE TRIM(service_type) != ''
+GROUP BY TRIM(service_type)
+ORDER BY times_performed DESC
+LIMIT 5
+
+-- TOP SERVICES THIS MONTH (with date filter)
+WITH anchor AS (SELECT DATE_TRUNC('month', MAX(close_date)) AS m FROM dms_service WHERE ro_status ILIKE '%clos%')
+SELECT TRIM(service_type) AS service_type, COUNT(*) AS times_performed
+FROM (
+    SELECT UNNEST(STRING_SPLIT(operation_code_descriptions, '|')) AS service_type
+    FROM dms_service
+    WHERE close_date >= (SELECT m FROM anchor) AND ro_status ILIKE '%clos%'
+      AND operation_code_descriptions IS NOT NULL AND TRIM(operation_code_descriptions) != ''
+) sub
+WHERE TRIM(service_type) != ''
+GROUP BY TRIM(service_type) ORDER BY times_performed DESC LIMIT 5
+
 -- SALES PERFORMANCE: TOP SALESPERSON
 WITH anchor AS (SELECT DATE_TRUNC('month', MAX(booked_date)) AS m FROM dms_sales)
 SELECT salesman_1_name AS salesperson,
@@ -1290,9 +1317,10 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - Hours columns (labor_bill_hours, labor_tech_hours) are VARCHAR — always try_cast to DOUBLE
 - Date columns are DATE type — use them directly for comparisons; do not use the *_raw columns
 - NEVER use CURRENT_DATE — always anchor to MAX(date) in the relevant table
+- CRITICAL: If the question does NOT mention a specific time period (e.g. "today", "this month", "last week"), do NOT add any date filter at all — query all available data
 - ro_status for closed ROs: use ro_status ILIKE '%clos%' (not exact equality)
 - ro_status for open ROs: use ro_status NOT ILIKE '%clos%'
-- operation_code_descriptions is pipe-delimited (e.g. 'ELOF|MPI') — use ILIKE '%keyword%'
+- operation_code_descriptions is pipe-delimited (e.g. 'REPAIR TIRE|MULTI POINT INSPECTION') — to count individual service types, use STRING_SPLIT and UNNEST. Use ILIKE '%keyword%' for searching within it
 - In dms_inventory: vehicle_status is EMPTY STRING '' for active/in-stock units; 'NOT IN INVENTORY' for units no longer on the lot. NEVER use vehicle_status ILIKE '%stock%' — it returns 0. Use: vehicle_status NOT ILIKE '%not in%' OR vehicle_status = '' to mean "in stock/active"
 - customer_number is the join key for appointments, service, and sales (NOT in inventory)
 - Primary cross-table join key: VIN
