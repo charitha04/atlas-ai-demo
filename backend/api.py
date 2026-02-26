@@ -500,6 +500,22 @@ def _get_connection() -> duckdb.DuckDBPyConnection:
 # ---------------------------------------------------------------
 def validate_sql(sql: str) -> str:
     s = (sql or "").strip().strip(";")
+    def _snake_case_identifier(name: str) -> str:
+        # Convert raw headers like "Close Date" -> close_date
+        out = re.sub(r"[^a-zA-Z0-9]+", "_", (name or "").strip().lower())
+        out = re.sub(r"_+", "_", out).strip("_")
+        return out
+
+    def _infer_referenced_tables(query: str) -> set[str]:
+        # Best-effort parsing of FROM/JOIN targets; only returns known tables.
+        known = set(TABLE_DOCS.keys())
+        tables: set[str] = set()
+        for m in re.finditer(r"(?is)\b(from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", query):
+            t = m.group(2)
+            if t in known:
+                tables.add(t)
+        return tables
+
     # Dataset guardrails:
     # Some models still emit ro_status-based filters even though ro_status is empty in this dataset.
     # Rewrite the common patterns to the correct closed/open logic so queries don't accidentally return 0.
@@ -532,6 +548,23 @@ def validate_sql(sql: str) -> str:
     }
     for raw_name, view_name in column_rewrites.items():
         s = re.sub(rf"(?is)\"{re.escape(raw_name)}\"", view_name, s)
+
+    # Generic raw quoted identifier rewrite:
+    # If the model outputs quoted raw headers we didn't explicitly map,
+    # try converting "Some Header" -> some_header when that column exists in referenced tables.
+    referenced_tables = _infer_referenced_tables(s)
+    allowed_columns: set[str] = set()
+    for t in referenced_tables:
+        allowed_columns.update(TABLE_DOCS.get(t, {}).get("columns", {}).keys())
+
+    def _rewrite_quoted_identifier(match: re.Match) -> str:
+        raw = match.group(1)
+        candidate = _snake_case_identifier(raw)
+        if candidate and (not allowed_columns or candidate in allowed_columns):
+            return candidate
+        return match.group(0)
+
+    s = re.sub(r"(?s)\"([^\"]+)\"", _rewrite_quoted_identifier, s)
     # Inventory status guardrail: this dataset uses '' for active/in-stock, not the string 'In Stock'
     s = re.sub(r"(?is)\bvehicle_status\s+ilike\s+'%stock%'\b", "vehicle_status NOT ILIKE '%not in%'", s)
     s = re.sub(r"(?is)\bvehicle_status\s*=\s*'in stock'\b", "vehicle_status NOT ILIKE '%not in%'", s)
@@ -2101,7 +2134,10 @@ def _detect_topics(question: str, conversation_history: list[dict] | None = None
 def _build_friendly_error_message(question: str, error: Exception) -> str:
     error_str = str(error)
     if "not found in FROM clause" in error_str or "Referenced column" in error_str:
-        preamble = "I wasn't able to find the right columns to answer that question."
+        preamble = (
+            "I wasn't able to find the right columns to answer that question. "
+            "Try rephrasing it using the schema terms (e.g. close_date, open_date, file_date, inventory_date)."
+        )
     elif "Table" in error_str and "does not exist" in error_str:
         preamble = "I couldn't find the right data source to answer that question."
     elif "Binder Error" in error_str or "Catalog Error" in error_str:
