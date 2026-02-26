@@ -505,6 +505,33 @@ def validate_sql(sql: str) -> str:
     # Rewrite the common patterns to the correct closed/open logic so queries don't accidentally return 0.
     s = re.sub(r"(?is)\bro_status\s+not\s+ilike\s+'%clos%'\b", "close_date IS NULL", s)
     s = re.sub(r"(?is)\bro_status\s+ilike\s+'%clos%'\b", "close_date IS NOT NULL", s)
+
+    # Common raw parquet column names (quoted) -> view columns (snake_case)
+    # Helps when a model uses raw headers like s."Close Date" instead of s.close_date.
+    column_rewrites = {
+        "Close Date": "close_date",
+        "Open Date": "open_date",
+        "Inventory Date": "inventory_date",
+        "Sold Date": "sold_date",
+        "Purchase Date": "purchase_date",
+        "Vehicle Status": "vehicle_status",
+        "Operation Codes": "operation_codes",
+        "Operation Code Descriptions": "operation_code_descriptions",
+        "Service Advisor Name": "service_advisor_name",
+        "Customer Total Sale": "customer_total_sale",
+        "Total Sale": "total_sale",
+        "Total Cost": "total_cost",
+        "List Price": "list_price",
+        "Internet Price": "internet_price",
+        "MSRP": "msrp",
+        "Stock Number": "stock_number",
+        "RO Number": "ro_number",
+        "Customer Number": "customer_number",
+        "Full Name": "customer_name",
+        "Appointment Date": "appointment_date",
+    }
+    for raw_name, view_name in column_rewrites.items():
+        s = re.sub(rf"(?is)\"{re.escape(raw_name)}\"", view_name, s)
     # Inventory status guardrail: this dataset uses '' for active/in-stock, not the string 'In Stock'
     s = re.sub(r"(?is)\bvehicle_status\s+ilike\s+'%stock%'\b", "vehicle_status NOT ILIKE '%not in%'", s)
     s = re.sub(r"(?is)\bvehicle_status\s*=\s*'in stock'\b", "vehicle_status NOT ILIKE '%not in%'", s)
@@ -1349,6 +1376,7 @@ SELECT s.sales_count, sr.ro_count, sr.revenue FROM sales_this_month s, service_t
 - Date columns are DATE type — use them directly for comparisons; do not use the *_raw columns
 - NEVER use CURRENT_DATE — always anchor to MAX(date) in the relevant table
 - CRITICAL: If the question does NOT mention a specific time period (e.g. "today", "this month", "last week"), do NOT add any date filter at all — query all available data
+- CRITICAL: Use ONLY the exact snake_case column names shown in the TABLE SCHEMAS above. NEVER use raw parquet column names like "Close Date", "Inventory Date", "Vehicle Status", etc.
 - CRITICAL: ro_status is ALWAYS EMPTY STRING in this dataset — NEVER use ro_status ILIKE '%clos%' or any ro_status filter, it will always return 0 rows
 - To identify CLOSED ROs: use close_date IS NOT NULL (close_date is populated when the RO is closed)
 - To identify OPEN/IN-PROGRESS ROs: use close_date IS NULL
