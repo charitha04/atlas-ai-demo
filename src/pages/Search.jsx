@@ -11,7 +11,11 @@ import { maskName, maskVin } from '../lib/utils';
 import ChartRenderer from '../components/search/ChartRenderer';
 
 // Backend URL for the Stephen Wade Group real DMS chatbot
-const CHATBOT_API_URL = 'https://atlas-ai-demo.onrender.com';
+// For Render/Vite: set VITE_CHATBOT_API_URL at build time (e.g. https://your-backend.onrender.com)
+const DEFAULT_CHATBOT_API_URL = import.meta.env.DEV
+  ? 'http://localhost:8000'
+  : 'https://atlas-ai-demo.onrender.com';
+const CHATBOT_API_URL = (import.meta.env.VITE_CHATBOT_API_URL || DEFAULT_CHATBOT_API_URL).replace(/\/$/, '');
 
 // Conversation starters for mock-data accounts (Prestige Toyota, Luxury Honda, Elite Ford)
 const conversationStarters = [

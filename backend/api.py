@@ -74,11 +74,16 @@ RESULT_LIMIT = 200
 # DMS date range cache — loaded once at startup
 # ---------------------------------------------------------------
 def _load_dms_date_ranges() -> dict[str, dict]:
-    """Query min/max dates from each DMS table so we can tell users what period we have data for."""
+    """Query min/max dates from each DMS table so we can tell users what period we have data for.
+
+    We keep two concepts:
+    - Business date range: the operational date column (open_date, appointment_date, etc.)
+    - Snapshot (pulled) date range: file_date from the parquet exports
+    """
     if not DMS_PARQUET_AVAILABLE:
         return {}
     ranges: dict[str, dict] = {}
-    _table_date_cols = {
+    business_date_cols = {
         "dms_service": "open_date",
         "dms_appointments": "appointment_date",
         "dms_sales": "booked_date",
@@ -87,13 +92,43 @@ def _load_dms_date_ranges() -> dict[str, dict]:
     try:
         con = duckdb.connect()
         _create_dms_parquet_views(con, DMS_PARQUET_DIR_DEFAULT)
-        for table, date_col in _table_date_cols.items():
+        for table, business_col in business_date_cols.items():
             try:
-                row = con.execute(
-                    f"SELECT MIN({date_col}), MAX({date_col}) FROM {table}"
+                snapshot_row = con.execute(
+                    f"SELECT MIN(file_date), MAX(file_date) FROM {table}"
                 ).fetchone()
-                if row and row[0] and row[1]:
-                    ranges[table] = {"min": str(row[0]), "max": str(row[1])}
+                snapshot_min = str(snapshot_row[0]) if snapshot_row and snapshot_row[0] else None
+                snapshot_max = str(snapshot_row[1]) if snapshot_row and snapshot_row[1] else None
+
+                # For inventory, business dates can contain very old historical values; compute the
+                # "normal" range from the latest snapshot (what's actually on the lot at pull time),
+                # and ignore extreme historical outliers by bounding to a recent window relative to
+                # the snapshot date.
+                if table == "dms_inventory":
+                    business_row = con.execute(f"""
+                        WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
+                        SELECT MIN({business_col}), MAX({business_col})
+                        FROM dms_inventory
+                        WHERE file_date = (SELECT snap FROM latest)
+                          AND {business_col} IS NOT NULL
+                          AND {business_col} >= (SELECT snap FROM latest) - INTERVAL 3 YEAR
+                          AND {business_col} <= (SELECT snap FROM latest)
+                    """).fetchone()
+                else:
+                    business_row = con.execute(
+                        f"SELECT MIN({business_col}), MAX({business_col}) FROM {table}"
+                    ).fetchone()
+
+                business_min = str(business_row[0]) if business_row and business_row[0] else None
+                business_max = str(business_row[1]) if business_row and business_row[1] else None
+
+                if snapshot_min or snapshot_max or business_min or business_max:
+                    ranges[table] = {
+                        "min": business_min,
+                        "max": business_max,
+                        "snapshot_min": snapshot_min,
+                        "snapshot_max": snapshot_max,
+                    }
             except Exception:
                 pass
         con.close()
@@ -324,7 +359,8 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("Estimate Amount","estimate_amount")},
             {raw_expr("Loaner Flag","loaner_flag")},
             {raw_expr("Waiting Flag","waiting_flag")},
-            {raw_expr("Sale Type","sale_type")}
+            {raw_expr("Sale Type","sale_type")},
+            file_date
         FROM read_parquet('{parquet_glob("appointments")}')
     """)
 
@@ -376,7 +412,8 @@ def _create_dms_parquet_views(con: duckdb.DuckDBPyConnection, dms_parquet_dir: s
             {raw_expr("Warranty Parts Sale","warranty_parts_sale")},
             {raw_expr("Internal Total Sale","internal_total_sale")},
             {raw_expr("Internal Labor Sale","internal_labor_sale")},
-            {raw_expr("Internal Parts Sale","internal_parts_sale")}
+            {raw_expr("Internal Parts Sale","internal_parts_sale")},
+            file_date
         FROM read_parquet('{parquet_glob("service")}')
     """)
 
@@ -719,17 +756,25 @@ def _compute_table_insights(con: duckdb.DuckDBPyConnection, table_name: str) -> 
     elif table_name == "dms_inventory":
         try:
             stats = con.execute("""
+                WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
                 SELECT COUNT(*) AS row_count, COUNT(DISTINCT vin) AS distinct_vins,
                        MIN(inventory_date) AS earliest_date, MAX(inventory_date) AS latest_date,
+                       MIN(file_date) AS snapshot_min, MAX(file_date) AS snapshot_max,
                        SUM(CASE WHEN sold_date IS NOT NULL THEN 1 ELSE 0 END) AS sold_count
                 FROM dms_inventory
+                WHERE file_date = (SELECT snap FROM latest)
+                  AND inventory_date IS NOT NULL
+                  AND inventory_date >= (SELECT snap FROM latest) - INTERVAL 3 YEAR
+                  AND inventory_date <= (SELECT snap FROM latest)
             """).df()
             if not stats.empty:
                 r = stats.iloc[0]
                 insights.append(f"- Total inventory records: {int(r.get('row_count', 0)):,}")
                 insights.append(f"- Distinct VINs: {int(r.get('distinct_vins', 0)):,}")
                 insights.append(f"- Sold vehicles: {int(r.get('sold_count', 0)):,}")
-                insights.append(f"- Date range: {r.get('earliest_date')} to {r.get('latest_date')}")
+                insights.append(f"- Inventory date range (latest pull): {r.get('earliest_date')} to {r.get('latest_date')}")
+                if r.get("snapshot_min") is not None and r.get("snapshot_max") is not None:
+                    insights.append(f"- Pulled date (file_date): {r.get('snapshot_min')} to {r.get('snapshot_max')}")
         except Exception:
             pass
 
@@ -1560,7 +1605,21 @@ The current question below may be a follow-up. If it references previous results
     for table, label in _range_labels.items():
         info = DMS_DATE_RANGES.get(table)
         if info:
-            data_coverage_lines.append(f"- {label}: {info['min']} to {info['max']}")
+            business_min = info.get("min")
+            business_max = info.get("max")
+            snap_min = info.get("snapshot_min")
+            snap_max = info.get("snapshot_max")
+            business_part = (
+                f"{business_min} to {business_max}"
+                if business_min and business_max
+                else "unknown"
+            )
+            snap_part = (
+                f"{snap_min} to {snap_max}"
+                if snap_min and snap_max
+                else "unknown"
+            )
+            data_coverage_lines.append(f"- {label}: {business_part} | pulled (file_date): {snap_part}")
     data_coverage_block = ""
     if data_coverage_lines:
         latest_service = DMS_DATE_RANGES.get("dms_service", {}).get("max", "")
@@ -1924,7 +1983,22 @@ def _build_data_coverage_note() -> str:
     for table, label in labels.items():
         info = DMS_DATE_RANGES.get(table)
         if info:
-            parts.append(f"{label}: {_format_date_friendly(info['min'])} to {_format_date_friendly(info['max'])}")
+            business_min = info.get("min")
+            business_max = info.get("max")
+            snap_min = info.get("snapshot_min")
+            snap_max = info.get("snapshot_max")
+
+            business_part = (
+                f"{_format_date_friendly(business_min)} to {_format_date_friendly(business_max)}"
+                if business_min and business_max
+                else "unknown"
+            )
+            snap_part = (
+                f"{_format_date_friendly(snap_min)} to {_format_date_friendly(snap_max)}"
+                if snap_min and snap_max
+                else "unknown"
+            )
+            parts.append(f"{label}: {business_part} (pulled: {snap_part})")
     if parts:
         return "Available data ranges: " + " | ".join(parts)
     return ""
@@ -2093,6 +2167,29 @@ def _is_strategy_question(question: str, conversation_history: list[dict] | None
 def _gather_analytics(con: duckdb.DuckDBPyConnection, topics: set[str]) -> dict:
     analytics: dict = {}
 
+    # Always include high-level coverage ranges for relevant datasets.
+    dataset_to_table = {
+        "appointments": ("dms_appointments", "appointment_date"),
+        "service": ("dms_service", "open_date"),
+        "inventory": ("dms_inventory", "inventory_date"),
+        "sales": ("dms_sales", "booked_date"),
+    }
+    coverage: dict[str, dict] = {}
+    for dataset, (table, business_col) in dataset_to_table.items():
+        if dataset not in topics:
+            continue
+        info = DMS_DATE_RANGES.get(table) or {}
+        coverage[dataset] = {
+            "business_date_column": business_col,
+            "business_min": info.get("min"),
+            "business_max": info.get("max"),
+            "pulled_date_column": "file_date",
+            "pulled_min": info.get("snapshot_min"),
+            "pulled_max": info.get("snapshot_max"),
+        }
+    if coverage:
+        analytics["data_coverage"] = coverage
+
     if "retention" in topics and retention_df is not None:
         score_col = "predicted_retention_score" if "predicted_retention_score" in retention_df.columns else "retention_score"
         try:
@@ -2119,7 +2216,8 @@ def _gather_analytics(con: duckdb.DuckDBPyConnection, topics: set[str]) -> dict:
             if dataset == "appointments":
                 df = con.execute("""
                     SELECT COUNT(*) AS total, COUNT(DISTINCT vin) AS vins,
-                           MIN(appointment_date) AS from_date, MAX(appointment_date) AS to_date
+                           MIN(appointment_date) AS from_date, MAX(appointment_date) AS to_date,
+                           MIN(file_date) AS pulled_from, MAX(file_date) AS pulled_to
                     FROM dms_appointments
                 """).df()
                 analytics["appointment_overview"] = df.to_dict(orient="records")[0]
@@ -2127,22 +2225,31 @@ def _gather_analytics(con: duckdb.DuckDBPyConnection, topics: set[str]) -> dict:
                 df = con.execute(f"""
                     SELECT COUNT(*) AS total_ros, COUNT(DISTINCT vin) AS vins,
                            ROUND(AVG({_try_cast_money_sql('customer_total_sale')}), 2) AS avg_sale,
-                           MIN(open_date) AS from_date, MAX(open_date) AS to_date
+                           MIN(open_date) AS from_date, MAX(open_date) AS to_date,
+                           MIN(file_date) AS pulled_from, MAX(file_date) AS pulled_to
                     FROM dms_service
                 """).df()
                 analytics["service_overview"] = df.to_dict(orient="records")[0]
             elif dataset == "inventory":
                 df = con.execute("""
+                    WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory)
                     SELECT COUNT(*) AS total,
-                           SUM(CASE WHEN sold_date IS NOT NULL THEN 1 ELSE 0 END) AS sold
+                           SUM(CASE WHEN sold_date IS NOT NULL THEN 1 ELSE 0 END) AS sold,
+                           MIN(inventory_date) AS from_date, MAX(inventory_date) AS to_date,
+                           (SELECT snap FROM latest) AS pulled_on
                     FROM dms_inventory
+                    WHERE file_date = (SELECT snap FROM latest)
+                      AND inventory_date IS NOT NULL
+                      AND inventory_date >= (SELECT snap FROM latest) - INTERVAL 3 YEAR
+                      AND inventory_date <= (SELECT snap FROM latest)
                 """).df()
                 analytics["inventory_overview"] = df.to_dict(orient="records")[0]
             elif dataset == "sales":
                 df = con.execute(f"""
                     SELECT COUNT(*) AS total,
                            ROUND(AVG({_try_cast_money_sql('total_profit')}), 2) AS avg_profit,
-                           MIN(booked_date) AS from_date, MAX(booked_date) AS to_date
+                           MIN(booked_date) AS from_date, MAX(booked_date) AS to_date,
+                           MIN(file_date) AS pulled_from, MAX(file_date) AS pulled_to
                     FROM dms_sales
                 """).df()
                 analytics["sales_overview"] = df.to_dict(orient="records")[0]
@@ -2262,6 +2369,10 @@ Instructions:
 4. Be specific with numbers from the data (e.g., "Your 142 high-risk customers have an average of 180 days since their last visit — a time-sensitive reactivation offer would help").
 5. Keep the tone professional but conversational.
 6. Do NOT output SQL or code.
+7. If the user is asking about "what data do you have", "time period", "date range", or "from when do we have data":
+   - Explicitly report BOTH:
+     - the actual business date coverage (e.g. open_date / appointment_date / booked_date / inventory_date)
+     - the data pulled coverage based on file_date (snapshot/pull dates)
 
 FORMATTING RULES (very important):
 - Use simple HTML for structure. Use <h3> for section headings, <h4> for sub-headings.
