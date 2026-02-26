@@ -505,6 +505,30 @@ def validate_sql(sql: str) -> str:
     # Rewrite the common patterns to the correct closed/open logic so queries don't accidentally return 0.
     s = re.sub(r"(?is)\bro_status\s+not\s+ilike\s+'%clos%'\b", "close_date IS NULL", s)
     s = re.sub(r"(?is)\bro_status\s+ilike\s+'%clos%'\b", "close_date IS NOT NULL", s)
+    # Inventory status guardrail: this dataset uses '' for active/in-stock, not the string 'In Stock'
+    s = re.sub(r"(?is)\bvehicle_status\s+ilike\s+'%stock%'\b", "vehicle_status NOT ILIKE '%not in%'", s)
+    s = re.sub(r"(?is)\bvehicle_status\s*=\s*'in stock'\b", "vehicle_status NOT ILIKE '%not in%'", s)
+
+    # Inventory snapshot guardrail:
+    # dms_inventory is a daily snapshot table. If the query doesn't reference file_date at all,
+    # it's almost always intended to be the latest snapshot; otherwise counts/lists double-count across days.
+    lower = s.lower()
+    if "from dms_inventory" in lower and "file_date" not in lower:
+        alias_match = re.search(r"(?is)\bfrom\s+dms_inventory\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b", s)
+        inv_ref = f"{alias_match.group(1)}.file_date" if alias_match else "file_date"
+        snap_filter = f"{inv_ref} = (SELECT MAX(file_date) FROM dms_inventory)"
+
+        boundary_match = re.search(r"(?is)\b(group\s+by|order\s+by|limit)\b", s)
+        boundary_idx = boundary_match.start() if boundary_match else len(s)
+        head, tail = s[:boundary_idx], s[boundary_idx:]
+
+        where_match = re.search(r"(?is)\bwhere\b", head)
+        if where_match:
+            head = head.rstrip() + f" AND {snap_filter} "
+        else:
+            head = head.rstrip() + f" WHERE {snap_filter} "
+        s = head + tail
+
     if not re.match(r"(?is)^\s*(select|with)\b", s):
         raise ValueError("Only SELECT queries are allowed")
     if re.search(FORBIDDEN, s, flags=re.IGNORECASE):
@@ -2380,6 +2404,56 @@ def health_check():
         "retention_data_available": RETENTION_DATA_AVAILABLE,
         "available_models": list(MODEL_OPTIONS.keys()),
     }
+
+
+@app.get("/selftest")
+def selftest():
+    """Deterministic checks (no LLM) to verify data + views are healthy."""
+    con = _get_connection()
+    results: dict[str, object] = {"status": "ok"}
+    try:
+        # Inventory snapshot sanity
+        results["inventory_snapshot_date"] = con.execute(
+            "SELECT MAX(file_date) FROM dms_inventory"
+        ).fetchone()[0]
+        results["inventory_units_current"] = con.execute(
+            "WITH latest AS (SELECT MAX(file_date) AS snap FROM dms_inventory) "
+            "SELECT COUNT(DISTINCT vin) FROM dms_inventory "
+            "WHERE file_date = (SELECT snap FROM latest) AND vehicle_status NOT ILIKE '%not in%'"
+        ).fetchone()[0]
+
+        # Service sanity
+        results["service_date_range"] = con.execute(
+            "SELECT MIN(open_date), MAX(open_date) FROM dms_service"
+        ).fetchone()
+        results["service_customers_closed"] = con.execute(
+            "SELECT COUNT(DISTINCT customer_number) FROM dms_service WHERE close_date IS NOT NULL"
+        ).fetchone()[0]
+        results["oil_change_revenue"] = con.execute(
+            "SELECT ROUND(SUM(try_cast(customer_total_sale AS DOUBLE)),2) "
+            "FROM dms_service "
+            "WHERE close_date IS NOT NULL AND ("
+            "  operation_code_descriptions ILIKE '%oil%' OR "
+            "  operation_code_descriptions ILIKE '%lube%' OR "
+            "  operation_code_descriptions ILIKE '%filter%' OR "
+            "  operation_codes ILIKE '%ELOF%'"
+            ")"
+        ).fetchone()[0]
+        results["top_service_types"] = con.execute(
+            "SELECT TRIM(service_type) AS service_type, COUNT(*) AS times_performed "
+            "FROM ("
+            "  SELECT UNNEST(STRING_SPLIT(operation_code_descriptions, '|')) AS service_type "
+            "  FROM dms_service "
+            "  WHERE operation_code_descriptions IS NOT NULL AND TRIM(operation_code_descriptions) != ''"
+            ") sub "
+            "WHERE TRIM(service_type) != '' "
+            "GROUP BY TRIM(service_type) "
+            "ORDER BY times_performed DESC LIMIT 5"
+        ).fetchall()
+    except Exception as exc:
+        results["status"] = "error"
+        results["error"] = str(exc)
+    return results
 
 
 @app.post("/chat", response_model=ChatResponse)
