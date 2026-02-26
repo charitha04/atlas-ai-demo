@@ -47,6 +47,7 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
   const [searchResults, setSearchResults] = useState(null);
   const [aiRecommendation, setAiRecommendation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('Thinking...');
   const [error, setError] = useState(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -57,6 +58,13 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
   const [isTyping, setIsTyping] = useState(false);
   const typewriterTimeoutRef = useRef(null);
   const rotationTimeoutRef = useRef(null);
+
+  // Pre-warm the Render backend as soon as the page loads so the first question is fast
+  useEffect(() => {
+    if (isStephenWadeAccount) {
+      fetch(`${CHATBOT_API_URL}/health`).catch(() => {});
+    }
+  }, [isStephenWadeAccount]);
 
   const _processQuery = (query, timePeriod, customersList) => {
     if (!query.trim() || !customersList || customersList.length === 0) {
@@ -191,6 +199,7 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
     }
 
     setIsLoading(true);
+    setLoadingMessage('Thinking...');
     setError(null);
     setAiRecommendation(null);
     setSearchResults(null);
@@ -198,6 +207,8 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
 
     // Stephen Wade Group: call the real DMS backend instead of the mock service
     if (isStephenWadeAccount) {
+      // After 8s with no response, show a friendlier "waking up" message
+      const slowTimer = setTimeout(() => setLoadingMessage('Connecting to server, please wait...'), 8000);
       try {
         const response = await fetch(`${CHATBOT_API_URL}/chat`, {
           method: 'POST',
@@ -211,6 +222,7 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
           throw new Error(errData.detail || `Server error ${response.status}`);
         }
         const data = await response.json();
+        clearTimeout(slowTimer);
         setSwAnswer({
           answer: data.answer,
           sql: data.sql_used,
@@ -220,6 +232,7 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
           chartConfig: data.chart_config || null,
         });
       } catch (err) {
+        clearTimeout(slowTimer);
         setError(err.message || 'Could not reach the DMS backend. Make sure it is running.');
       } finally {
         setIsLoading(false);
@@ -685,8 +698,8 @@ const Search = ({ customers = [], selectedAccount, onLaunchCampaign }) => {
               />
             </div>
             <div className="text-center">
-              <p className="text-copy-default font-medium text-lg">Running Ikon IQ</p>
-              <p className="text-copy-muted text-sm mt-1">Analyzing your query and generating recommendations...</p>
+              <p className="text-copy-default font-medium text-lg">{isStephenWadeAccount ? 'Atlas AI' : 'Running Ikon IQ'}</p>
+              <p className="text-copy-muted text-sm mt-1">{isStephenWadeAccount ? loadingMessage : 'Analyzing your query and generating recommendations...'}</p>
             </div>
             <div className="w-full space-y-4 mt-8">
               {/* Skeleton loader for recommendation card */}
