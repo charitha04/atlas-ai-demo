@@ -1500,15 +1500,26 @@ def _call_provider(
     return resp.content[0].text.strip()
 
 
+def _strip_sql_markdown(raw: str) -> str:
+    """Remove markdown code fences some models wrap around SQL output."""
+    raw = raw.strip()
+    # Strip opening fence: ```sql or ``` (with or without language tag)
+    raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw, flags=re.IGNORECASE)
+    # Strip closing fence
+    raw = re.sub(r"\s*```\s*$", "", raw)
+    return raw.strip()
+
+
 def _call_llm_for_sql(prompt: str, model_name: str) -> str:
     # SQL rarely exceeds ~300 tokens; lower max_tokens means faster API response.
-    return _call_provider(
-        system_prompt="Translate natural language into SQL. Return only a SQL SELECT query.",
+    raw = _call_provider(
+        system_prompt="Translate natural language into SQL. Return only a SQL SELECT query. Do not wrap in markdown code fences.",
         user_prompt=prompt,
         model_name=model_name,
         temperature=0,
         max_tokens=600,
     )
+    return _strip_sql_markdown(raw)
 
 
 def run_question(
